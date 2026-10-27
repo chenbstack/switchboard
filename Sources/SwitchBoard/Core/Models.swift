@@ -7,6 +7,22 @@ enum Provider: String, Codable, CaseIterable, Identifiable {
     var symbol: String { self == .claude ? "sparkle" : "chevron.left.forwardslash.chevron.right" }
 }
 
+/// 自定义 API / 中转站：切换时写入 ~/.claude/settings.json 的 env；密钥存在 Vault 里
+struct APIConfig: Codable, Equatable {
+    var baseURL: String
+    /// 默认模型（ANTHROPIC_MODEL）：新会话默认使用，留空 = 用 Claude Code 自己的默认
+    var model = ""
+    /// 模型映射：Claude Code 里的 opus / sonnet / haiku 别名 → 中转站实际模型名（留空 = 不映射）
+    var opus = ""
+    var sonnet = ""
+    var haiku = ""
+    /// 子代理模型（CLAUDE_CODE_SUBAGENT_MODEL）
+    var subagent = ""
+
+    var host: String { URL(string: baseURL)?.host ?? baseURL }
+    var hasMapping: Bool { !(model.isEmpty && opus.isEmpty && sonnet.isEmpty && haiku.isEmpty && subagent.isEmpty) }
+}
+
 struct Account: Identifiable, Codable, Equatable {
     var id: String
     var name: String
@@ -16,10 +32,11 @@ struct Account: Identifiable, Codable, Equatable {
     var oauth: JSONValue      // 原样保存的 oauthAccount，切换时写回 ~/.claude.json
     var addedAt: Date
     var provider: Provider = .claude
+    var api: APIConfig?       // 非空 = 自定义 API 账号（没有 OAuth 登录态）
 
-    init(id: String, name: String, email: String, uuid: String, plan: String, oauth: JSONValue, addedAt: Date, provider: Provider = .claude) {
+    init(id: String, name: String, email: String, uuid: String, plan: String, oauth: JSONValue, addedAt: Date, provider: Provider = .claude, api: APIConfig? = nil) {
         self.id = id; self.name = name; self.email = email; self.uuid = uuid; self.plan = plan
-        self.oauth = oauth; self.addedAt = addedAt; self.provider = provider
+        self.oauth = oauth; self.addedAt = addedAt; self.provider = provider; self.api = api
     }
 
     init(from d: Decoder) throws {
@@ -32,6 +49,7 @@ struct Account: Identifiable, Codable, Equatable {
         oauth = try c.decode(JSONValue.self, forKey: .oauth)
         addedAt = try c.decode(Date.self, forKey: .addedAt)
         provider = try c.decodeIfPresent(Provider.self, forKey: .provider) ?? .claude   // 旧版本没有这个字段
+        api = try c.decodeIfPresent(APIConfig.self, forKey: .api)
     }
 
     /// 展示用订阅类型：Pro / Max 5x / Max 20x / Team / Enterprise

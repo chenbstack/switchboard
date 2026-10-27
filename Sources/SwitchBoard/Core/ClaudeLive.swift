@@ -45,4 +45,49 @@ enum ClaudeLive {
         j["oauthAccount"] = acct.any
         try FileJSON.write(j, to: claudeJSON)
     }
+
+    // MARK: 自定义 API（写入 settings.json 的 env，优先级高于 OAuth 登录）
+
+    /// 记录「当前生效的是哪个 API 账号」的标记；有它才认为 env 是 SwitchBoard 写的
+    static let marker = "SWITCHBOARD_ACCOUNT"
+    static let managedKeys = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL",
+                              "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", marker]
+
+    static func activeAPIID() -> String? {
+        (FileJSON.read(settingsFile)?["env"] as? [String: Any])?[marker] as? String
+    }
+
+    private static func editEnv(_ body: (inout [String: Any]) -> Void) throws {
+        var j = FileJSON.read(settingsFile) ?? [:]
+        if FileManager.default.fileExists(atPath: settingsFile.path) {
+            let bak = settingsFile.appendingPathExtension("switchboard.bak")
+            if !FileManager.default.fileExists(atPath: bak.path) { try? FileManager.default.copyItem(at: settingsFile, to: bak) }
+        }
+        var env = j["env"] as? [String: Any] ?? [:]
+        body(&env)
+        if env.isEmpty { j.removeValue(forKey: "env") } else { j["env"] = env }
+        try FileManager.default.createDirectory(at: settingsFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileJSON.write(j, to: settingsFile)
+    }
+
+    static func applyAPI(_ acc: Account, key: String) throws {
+        guard let api = acc.api else { return }
+        try editEnv { env in
+            for k in managedKeys { env.removeValue(forKey: k) }
+            env["ANTHROPIC_BASE_URL"] = api.baseURL
+            env["ANTHROPIC_AUTH_TOKEN"] = key
+            if !api.model.isEmpty { env["ANTHROPIC_MODEL"] = api.model }
+            if !api.subagent.isEmpty { env["CLAUDE_CODE_SUBAGENT_MODEL"] = api.subagent }
+            if !api.opus.isEmpty { env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = api.opus }
+            if !api.sonnet.isEmpty { env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = api.sonnet }
+            if !api.haiku.isEmpty { env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = api.haiku }
+            env[marker] = acc.id
+        }
+    }
+
+    /// 只在 env 是我们写入的（有标记）时才清理，不动用户自己手写的配置
+    static func clearAPI() throws {
+        guard activeAPIID() != nil else { return }
+        try editEnv { env in for k in managedKeys { env.removeValue(forKey: k) } }
+    }
 }

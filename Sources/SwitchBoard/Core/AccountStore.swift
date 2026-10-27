@@ -122,6 +122,51 @@ enum AccountStore {
         return rest
     }
 
+    // MARK: 自定义 API 账号
+
+    static func normalizeURL(_ raw: String) throws -> String {
+        var u = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        while u.hasSuffix("/") { u.removeLast() }
+        guard let url = URL(string: u), let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme), url.host != nil else {
+            throw AppError(L("请输入有效的 Base URL（以 http:// 或 https:// 开头）", "Please enter a valid Base URL (starting with http:// or https://)"))
+        }
+        return u
+    }
+
+    /// id = nil 新增；否则编辑（key 留空表示不改密钥）
+    static func saveAPI(id: String?, name: String, config: APIConfig, key: String, existing: [Account]) async throws -> [Account] {
+        let name = name.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { throw AppError(L("请输入账号名称", "Please enter an account name")) }
+        guard !existing.contains(where: { $0.name == name && $0.id != id }) else { throw AppError(L("已存在同名账号", "An account with this name already exists")) }
+        var cfg = config
+        cfg.baseURL = try normalizeURL(config.baseURL)
+        for k in [\.model, \.opus, \.sonnet, \.haiku, \.subagent] as [WritableKeyPath<APIConfig, String>] { cfg[keyPath: k] = cfg[keyPath: k].trimmingCharacters(in: .whitespaces) }
+        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        var all = existing
+        if let id, let i = all.firstIndex(where: { $0.id == id }) {
+            if !key.isEmpty { guard await Vault.shared.set(id, key) else { throw AppError(L("写入钥匙串失败", "Failed to write to the Keychain")) } }
+            all[i].name = name; all[i].api = cfg; all[i].email = cfg.host
+        } else {
+            guard !key.isEmpty else { throw AppError(L("请输入 API 密钥", "Please enter the API key")) }
+            let newID = UUID().uuidString
+            guard await Vault.shared.set(newID, key) else { throw AppError(L("写入钥匙串失败", "Failed to write to the Keychain")) }
+            all.append(Account(id: newID, name: name, email: cfg.host, uuid: "api-" + newID, plan: "API",
+                               oauth: .null, addedAt: Date(), provider: .claude, api: cfg))
+        }
+        try save(all)
+        return all
+    }
+
+    static func switchToAPI(_ target: Account, accounts: [Account]) async throws -> [Account] {
+        let synced = await syncLive(into: accounts)   // 离开前把 OAuth 登录态回写，避免 refresh token 过期
+        guard let key = await Vault.shared.get(target.id), !key.isEmpty else {
+            throw AppError(L("该账号的 API 密钥丢失，请编辑后重新输入", "The API key for this account is missing. Edit it and enter the key again"))
+        }
+        try ClaudeLive.applyAPI(target, key: key)
+        guard ClaudeLive.activeAPIID() == target.id else { throw AppError(L("写入 ~/.claude/settings.json 失败，请重试", "Failed to write ~/.claude/settings.json. Please try again")) }
+        return synced
+    }
+
     // MARK: 保持快照新鲜
     // Claude Code 会轮换 refresh token；若快照里还是旧的，之后切回该账号就会「登录已失效」。
     // 所以每次刷新/切换前，把当前登录态回写到对应账号。
@@ -150,6 +195,7 @@ enum AccountStore {
               obj["claudeAiOauth"] != nil else {
             throw AppError(L("该账号的已存凭证丢失，请重新登录添加", "The saved credentials for this account are missing. Please log in and add it again"))
         }
+        try ClaudeLive.clearAPI()   // 从 API 账号切回时，去掉 settings.json 里的中转站配置
         guard await ClaudeLive.writeCredential(cred) else { throw AppError(L("写入 Claude Code 凭证失败", "Failed to write the Claude Code credentials")) }
         try ClaudeLive.setOAuthAccount(target.oauth)
         guard ClaudeLive.identity()?.uuid == target.uuid else { throw AppError(L("切换后校验失败，~/.claude.json 可能被其他进程覆盖，请重试", "Verification after switching failed. ~/.claude.json may have been overwritten by another process. Please try again")) }

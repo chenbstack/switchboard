@@ -14,6 +14,8 @@ enum Route: Equatable {
     case save            // 保存当前登录会话
     case rename(String)  // 账号 id
     case waitingLogin
+    case addAPI          // 添加自定义 API
+    case editAPI(String) // 编辑自定义 API，账号 id
 }
 
 @MainActor
@@ -24,6 +26,21 @@ final class AppModel: ObservableObject {
     @Published var status: [String: AccountStatus] = [:]
     @Published var route: Route = .list
     @Published var draftName = ""
+    @Published var draftBaseURL = ""
+    @Published var draftKey = ""
+    @Published var draftOpus = ""
+    @Published var draftSonnet = ""
+    @Published var draftHaiku = ""
+    @Published var draftModel = ""
+    @Published var draftSubagent = ""
+    /// 表单里「获取模型列表」的结果
+    @Published var apiModels: [String] = []
+    @Published var modelsLoading = false
+    @Published var modelsError: String?
+    /// 当前生效的自定义 API 账号 id（settings.json 里的标记）
+    @Published var apiActive: String?
+    /// 连通性探测通过的 API 账号
+    @Published var apiOK: Set<String> = []
     @Published var formError: String?
     @Published var toast: String?
     @Published var update: UpdateInfo?
@@ -68,6 +85,8 @@ final class AppModel: ObservableObject {
     var loginExpect: Account?
     var codexLogin: CodexLogin?
     private var toastTask: Task<Void, Never>?
+    /// --demo：只在内存里演示，所有会写钥匙串 / 配置文件的操作都不执行
+    private(set) var demo = false
     private var timer: Timer?
     private var retryCount = 0
 
@@ -75,7 +94,11 @@ final class AppModel: ObservableObject {
 
     func liveFor(_ p: Provider) -> LiveIdentity? { p == .claude ? live : liveCodex }
     var currentLive: LiveIdentity? { liveFor(provider) }
-    func isActive(_ a: Account) -> Bool { liveFor(a.provider)?.uuid == a.uuid }
+    func isActive(_ a: Account) -> Bool {
+        if a.api != nil { return apiActive == a.id }
+        if a.provider == .claude, apiActive != nil { return false }   // API 的 env 优先于 OAuth 登录
+        return liveFor(a.provider)?.uuid == a.uuid
+    }
 
     /// 当前 provider 下的账号
     var shown: [Account] { accounts.filter { $0.provider == provider } }
@@ -99,6 +122,7 @@ final class AppModel: ObservableObject {
 
     /// --demo：示例数据，不碰钥匙串和网络，仅用于验证界面
     private func startDemo() {
+        demo = true
         func acc(_ n: String, _ e: String, _ plan: String) -> Account {
             Account(id: n, name: n, email: e, uuid: "u-" + n, plan: plan, oauth: .null, addedAt: Date().addingTimeInterval(Double(n.count)))
         }
@@ -121,8 +145,17 @@ final class AppModel: ObservableObject {
         usage["main"] = u(72, 190, 55, 96)
         usage["team"] = u(35, 80, 18, 40)
         if CommandLine.arguments.contains("--codex") { provider = .codex }
+        accounts.append(Account(id: "relay-a", name: "relay-a", email: "api.relay-demo.com", uuid: "api-relay-a", plan: "API", oauth: .null,
+                                addedAt: now.addingTimeInterval(9), api: APIConfig(baseURL: "https://api.relay-demo.com", opus: "claude-opus-relay", sonnet: "claude-sonnet-relay")))
+        apiOK = ["relay-a"]
         lastUpdated = now
         onChange?()
+    }
+
+    /// demo 模式下拦截写操作；返回 true 表示已拦截
+    private func blockedByDemo() -> Bool {
+        if demo { say(L("演示模式：不执行写入操作", "Demo mode: write actions are disabled")) }
+        return demo
     }
 
     func start() {
@@ -190,6 +223,7 @@ final class AppModel: ObservableObject {
     func reloadLive() {
         live = ClaudeLive.identity()
         liveCodex = CodexLive.identity()
+        apiActive = ClaudeLive.activeAPIID()
         onChange?()
     }
 
@@ -208,7 +242,7 @@ final class AppModel: ObservableObject {
     }
 
     func refreshAllNow() async {
-        guard !refreshing else { return }
+        guard !refreshing, !demo else { manualRefreshing = false; return }
         refreshing = true
         defer {
             refreshing = false
@@ -223,9 +257,16 @@ final class AppModel: ObservableObject {
         codexKeyring = await CodexLive.usesKeyringOnly()
         let targets = accounts
         let activeIDs = Set(targets.filter(isActive).map(\.id))
-        for a in targets where usage[a.id] == nil { status[a.id] = .loading }
+        for a in targets where usage[a.id] == nil && a.api == nil { status[a.id] = .loading }
         // 逐个串行请求：避免多账号并发打接口（限流）和并发刷新同一份凭证
         for a in targets {
+            if a.api != nil {
+                let st = await APIService.check(a)
+                status[a.id] = st
+                if st == nil { apiOK.insert(a.id) } else { apiOK.remove(a.id) }
+                onChange?()
+                continue
+            }
             let active = activeIDs.contains(a.id)
             let out = a.provider == .codex ? await CodexService.load(a, isActive: active) : await UsageService.load(a, isActive: active)
             switch out {
@@ -261,15 +302,21 @@ final class AppModel: ObservableObject {
     // MARK: 切换
 
     func switchTo(_ acc: Account) {
-        guard switching == nil, !isActive(acc) else { return }
+        guard switching == nil, !isActive(acc), !blockedByDemo() else { return }
         switching = acc.id
         Task {
             do {
-                accounts = acc.provider == .codex ? try await AccountStore.switchToCodex(acc, accounts: accounts)
-                                                  : try await AccountStore.switchTo(acc, accounts: accounts)
+                if acc.api != nil {
+                    accounts = try await AccountStore.switchToAPI(acc, accounts: accounts)
+                } else {
+                    accounts = acc.provider == .codex ? try await AccountStore.switchToCodex(acc, accounts: accounts)
+                                                      : try await AccountStore.switchTo(acc, accounts: accounts)
+                }
                 reloadLive()
+                let wasAPI = acc.api != nil
                 var note = acc.provider == .codex ? L("新会话立即生效，已打开的 Codex 需重启", "Effective for new sessions; restart any open Codex") : L("新会话立即生效，IDE 需重启", "Effective for new sessions; restart your IDE")
-                if acc.provider == .claude, syncDesktop, ClaudeDesktop.installed, desktopSaved.contains(acc.id) || desktopOwner == acc.id {
+                if wasAPI { note = L("新会话立即生效，IDE 需重启（Claude 桌面端不受影响）", "Effective for new sessions; restart your IDE (Claude Desktop is unaffected)") }
+                else if acc.provider == .claude, syncDesktop, ClaudeDesktop.installed, desktopSaved.contains(acc.id) || desktopOwner == acc.id {
                     if desktopOwner != acc.id { note = await switchDesktop(acc, quiet: true) ? L("桌面端已同步，", "Desktop synced. ") + note : note }
                 }
                 say(L("已切换到 \(acc.name) · \(note)", "Switched to \(acc.name) · \(note)"))
@@ -290,6 +337,44 @@ final class AppModel: ObservableObject {
         route = .save
     }
 
+    func beginAddAPI() {
+        draftName = ""; draftBaseURL = ""; draftKey = ""; draftModel = ""; draftSubagent = ""; draftOpus = ""; draftSonnet = ""; draftHaiku = ""
+        apiModels = []; modelsError = nil
+        formError = nil
+        route = .addAPI
+    }
+
+    func beginEditAPI(_ a: Account) {
+        guard let api = a.api else { return }
+        draftName = a.name; draftBaseURL = api.baseURL; draftKey = ""
+        draftModel = api.model; draftSubagent = api.subagent; draftOpus = api.opus; draftSonnet = api.sonnet; draftHaiku = api.haiku
+        apiModels = []; modelsError = nil
+        formError = nil
+        route = .editAPI(a.id)
+        fetchModels()
+    }
+
+    /// 用表单里的 Base URL + 密钥拉模型列表；编辑时密钥留空则用已保存的
+    func fetchModels() {
+        guard !modelsLoading else { return }
+        var editID: String?
+        if case .editAPI(let i) = route { editID = i }
+        modelsError = nil
+        Task {
+            var key = draftKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if key.isEmpty, let editID { key = await Vault.shared.get(editID) ?? "" }
+            guard !key.isEmpty else { modelsError = L("请先输入 API 密钥", "Enter the API key first"); return }
+            modelsLoading = true
+            defer { modelsLoading = false }
+            do {
+                apiModels = try await APIService.fetchModels(baseURL: try AccountStore.normalizeURL(draftBaseURL), key: key)
+            } catch {
+                apiModels = []
+                modelsError = error.localizedDescription
+            }
+        }
+    }
+
     func beginRename(_ a: Account) {
         draftName = a.name
         formError = nil
@@ -297,6 +382,7 @@ final class AppModel: ObservableObject {
     }
 
     func confirmForm() {
+        guard !blockedByDemo() else { return }
         Task {
             do {
                 switch route {
@@ -305,11 +391,24 @@ final class AppModel: ObservableObject {
                                                  : try await AccountStore.addCurrent(name: draftName, existing: accounts)
                     accounts.append(acc)
                     say(L("已添加账号 \(acc.name)", "Added account \(acc.name)"))
+                case .addAPI, .editAPI:
+                    var id: String?
+                    if case .editAPI(let i) = route { id = i }
+                    let cfg = APIConfig(baseURL: draftBaseURL, model: draftModel, opus: draftOpus, sonnet: draftSonnet, haiku: draftHaiku, subagent: draftSubagent)
+                    accounts = try await AccountStore.saveAPI(id: id, name: draftName, config: cfg, key: draftKey, existing: accounts)
+                    // 正在使用的 API 账号被编辑：立刻把新配置写进 settings.json
+                    if let id, apiActive == id, let acc = accounts.first(where: { $0.id == id }),
+                       let key = await Vault.shared.get(id) {
+                        try ClaudeLive.applyAPI(acc, key: key)
+                    }
+                    say(id == nil ? L("已添加 API 账号 \(draftName)", "Added API account \(draftName)") : L("已保存", "Saved"))
+                    status = status.filter { $0.key != id }
                 case .rename(let id):
                     accounts = try AccountStore.rename(id, to: draftName, in: accounts)
                 default: return
                 }
                 route = .list
+                draftKey = ""
                 await refreshAllNow()
             } catch {
                 formError = error.localizedDescription
@@ -423,13 +522,17 @@ final class AppModel: ObservableObject {
         loginTask?.cancel()
         loginProc?.terminate()
         formError = nil
+        draftKey = ""
         route = .list
     }
 
     func remove(_ acc: Account) {
+        guard !blockedByDemo() else { return }
         Task {
             do {
+                if acc.api != nil, apiActive == acc.id { try ClaudeLive.clearAPI(); reloadLive() }
                 accounts = try await AccountStore.remove(acc, from: accounts)
+                apiOK.remove(acc.id)
                 if acc.provider == .claude { ClaudeDesktop.forget(acc.id); reloadDesktop() }
                 usage[acc.id] = nil
                 status[acc.id] = nil

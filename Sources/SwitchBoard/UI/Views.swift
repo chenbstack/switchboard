@@ -20,9 +20,11 @@ struct RootView: View {
                 NameForm(model: model)
             case .waitingLogin:
                 WaitingLogin(model: model)
+            case .addAPI, .editAPI:
+                APIForm(model: model)
             }
 
-            FooterBar(model: model)
+            if model.route == .list { FooterBar(model: model) }
         }
         .padding(16)
         .animation(.spring(response: 0.4, dampingFraction: 0.84), value: model.accounts)
@@ -163,7 +165,7 @@ struct AccountCard: View {
                     HStack(spacing: 6) {
                         Text(acc.name).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                         PlanPill(text: acc.planLabel)
-                        if acc.provider == .claude { DesktopChip(mark: model.desktopMark(acc)) }
+                        if acc.provider == .claude, acc.api == nil { DesktopChip(mark: model.desktopMark(acc)) }
                     }
                     Text(acc.email).font(.system(size: 11)).foregroundStyle(Theme.text2)
                         .lineLimit(1).truncationMode(.middle)
@@ -223,7 +225,9 @@ struct AccountCard: View {
     }
 
     @ViewBuilder var body_: some View {
-        if let u = usage {
+        if let api = acc.api {
+            apiBody(api)
+        } else if let u = usage {
             VStack(spacing: 8) {
                 if let m = u.session { MeterLine(title: L("5 小时", "5-hour"), meter: m) }
                 if let m = u.weekly { MeterLine(title: L("每周", "Weekly"), meter: m) }
@@ -245,6 +249,30 @@ struct AccountCard: View {
             default: SkeletonLines()
             }
         }
+    }
+}
+
+extension AccountCard {
+    /// 自定义 API：没有额度数据，只展示连通状态 + 模型映射
+    @ViewBuilder func apiBody(_ api: APIConfig) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            switch status {
+            case .error(let m):
+                Label(m, systemImage: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundStyle(Theme.warn)
+            default:
+                if model.apiOK.contains(acc.id) {
+                    Label(L("已连接", "Connected"), systemImage: "checkmark.circle.fill").font(.system(size: 11)).foregroundStyle(Theme.good)
+                } else {
+                    Label(L("检测中…", "Checking…"), systemImage: "network").font(.system(size: 11)).foregroundStyle(Theme.text2)
+                }
+            }
+            if api.hasMapping {
+                let parts = [(L("默认", "Default"), api.model), ("Opus", api.opus), ("Sonnet", api.sonnet), ("Haiku", api.haiku), (L("子代理", "Subagent"), api.subagent)].filter { !$0.1.isEmpty }
+                Text(parts.map { "\($0.0) → \($0.1)" }.joined(separator: "  ·  "))
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.text3).lineLimit(2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -287,8 +315,13 @@ struct AccountMenu: View {
     let acc: Account
     var body: some View {
         Button(L("重命名…", "Rename…")) { model.beginRename(acc) }
-        Button(L("刷新额度", "Refresh quota")) { model.refreshManually() }
-        if acc.provider == .claude, ClaudeDesktop.installed {
+        if acc.api != nil {
+            Button(L("编辑 API 配置…", "Edit API settings…")) { model.beginEditAPI(acc) }
+            Button(L("重新检测连接", "Re-check connection")) { model.refreshManually() }
+        } else {
+            Button(L("刷新额度", "Refresh quota")) { model.refreshManually() }
+        }
+        if acc.provider == .claude, acc.api == nil, ClaudeDesktop.installed {
             Divider()
             switch model.desktopMark(acc) {
             case .active:
@@ -332,10 +365,23 @@ struct UnsavedCard: View {
 struct AddBar: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        Button { model.beginLogin() } label: {
+        if model.provider == .claude {
+            // 两个按钮并排，文案缩短
+            HStack(spacing: 8) {
+                button("plus", L("登录另一个账号", "Add account")) { model.beginLogin() }
+                button("server.rack", L("自定义 API", "Custom API")) { model.beginAddAPI() }
+                    .help(L("添加自定义 API / 中转站", "Add custom API / relay"))
+            }
+        } else {
+            button("plus", L("登录另一个账号", "Log in to another account")) { model.beginLogin() }
+        }
+    }
+
+    private func button(_ symbol: String, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: "plus")
-                Text(L("登录另一个账号", "Log in to another account"))
+                Image(systemName: symbol)
+                Text(title).lineLimit(1).minimumScaleFactor(0.8)
             }
             .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.text2)
             .frame(maxWidth: .infinity).padding(.vertical, 11)
@@ -344,6 +390,137 @@ struct AddBar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: 自定义 API 表单（分组列表：标签在左、值在右，一行一个字段）
+
+struct FormGroup<Content: View>: View {
+    @ViewBuilder var content: Content
+    var body: some View {
+        VStack(spacing: 0) { content }
+            .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 0.8))
+    }
+}
+
+struct FormDivider: View {
+    var body: some View { Rectangle().fill(.white.opacity(0.07)).frame(height: 0.5).padding(.leading, 12) }
+}
+
+struct FormRow<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.text2)
+                .frame(width: 72, alignment: .leading)
+            content.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 12).frame(height: 38)
+    }
+}
+
+/// 一行一个模型：拿到模型列表后用下拉选择，否则手动输入
+struct ModelRow: View {
+    let title: String
+    let options: [String]
+    @Binding var value: String
+    var body: some View {
+        FormRow(title: title) {
+            if options.isEmpty {
+                TextField(L("可留空", "Optional"), text: $value).textFieldStyle(.plain).font(.system(size: 12.5))
+            } else {
+                Menu {
+                    Button(L("不设置", "Not set")) { value = "" }
+                    Divider()
+                    // 当前值不在列表里（例如换了站点）也保留可见
+                    ForEach(options.contains(value) || value.isEmpty ? options : [value] + options, id: \.self) { m in
+                        Button { value = m } label: { if m == value { Label(m, systemImage: "checkmark") } else { Text(m) } }
+                    }
+                } label: {
+                    HStack {
+                        Text(value.isEmpty ? L("不设置", "Not set") : value).lineLimit(1).truncationMode(.middle)
+                            .foregroundStyle(value.isEmpty ? Theme.text3 : Theme.text1)
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.text2)
+                    }
+                    .font(.system(size: 12.5)).contentShape(Rectangle())
+                }
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+            }
+        }
+    }
+}
+
+struct APIForm: View {
+    @ObservedObject var model: AppModel
+    var editing: Bool { if case .editAPI = model.route { return true }; return false }
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(editing ? L("编辑 API 账号", "Edit API account") : L("添加自定义 API / 中转站", "Add custom API / relay"))
+                    .font(.system(size: 14, weight: .semibold))
+
+                section(L("连接", "Connection")) {
+                    FormGroup {
+                        FormRow(title: L("名称", "Name")) {
+                            TextField(L("例如 relay-a", "e.g. relay-a"), text: $model.draftName).textFieldStyle(.plain).font(.system(size: 12.5))
+                        }
+                        FormDivider()
+                        FormRow(title: "Base URL") {
+                            TextField("https://api.example.com", text: $model.draftBaseURL).textFieldStyle(.plain).font(.system(size: 12.5))
+                        }
+                        FormDivider()
+                        FormRow(title: L("密钥", "API key")) {
+                            HStack(spacing: 6) {
+                                SecureField(editing ? L("留空 = 不修改", "Leave empty to keep") : "sk-…", text: $model.draftKey)
+                                    .textFieldStyle(.plain).font(.system(size: 12.5))
+                                Button { model.fetchModels() } label: {
+                                    if model.modelsLoading { ProgressView().controlSize(.small).scaleEffect(0.65).frame(width: 56) }
+                                    else { Text(L("获取模型", "Fetch models")) }
+                                }
+                                .buttonStyle(PillButton(fill: .white.opacity(0.12), textColor: Theme.text1, compact: true))
+                                .help(L("用当前 Base URL 和密钥获取模型列表", "Fetch the model list with the current Base URL and key"))
+                            }
+                        }
+                    }
+                    if let e = model.modelsError { Text(e).font(.system(size: 10.5)).foregroundStyle(Theme.warn) }
+                    else if !model.apiModels.isEmpty {
+                        Text(L("已获取 \(model.apiModels.count) 个模型，可在下方选择", "\(model.apiModels.count) models loaded. Pick them below")).font(.system(size: 10.5)).foregroundStyle(Theme.good)
+                    }
+                }
+
+                section(L("模型（可选）", "Models (optional)")) {
+                    FormGroup {
+                        ModelRow(title: L("默认模型", "Default"), options: model.apiModels, value: $model.draftModel)
+                        FormDivider()
+                        ModelRow(title: "Opus", options: model.apiModels, value: $model.draftOpus)
+                        FormDivider()
+                        ModelRow(title: "Sonnet", options: model.apiModels, value: $model.draftSonnet)
+                        FormDivider()
+                        ModelRow(title: "Haiku", options: model.apiModels, value: $model.draftHaiku)
+                        FormDivider()
+                        ModelRow(title: L("子代理", "Subagent"), options: model.apiModels, value: $model.draftSubagent)
+                    }
+                }
+
+                if let e = model.formError { Text(e).font(.system(size: 11)).foregroundStyle(Theme.bad) }
+                HStack {
+                    Spacer()
+                    Button(L("取消", "Cancel")) { model.cancelRoute() }.buttonStyle(PillButton(fill: .white.opacity(0.1), textColor: Theme.text1))
+                    Button(editing ? L("保存", "Save") : L("添加", "Add")) { model.confirmForm() }.buttonStyle(PillButton(fill: Theme.accent))
+                }
+            }
+        }
+    }
+
+    private func section<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.system(size: 11)).foregroundStyle(Theme.text2).padding(.leading, 4)
+            content()
+        }
     }
 }
 
