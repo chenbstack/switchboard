@@ -27,6 +27,10 @@ final class AppModel: ObservableObject {
     @Published var formError: String?
     @Published var toast: String?
     @Published var update: UpdateInfo?
+    /// 界面语言：auto 跟随系统；切换后触发整个面板重绘
+    @Published var language: String = UserDefaults.standard.string(forKey: "language") ?? "auto" {
+        didSet { UserDefaults.standard.set(language, forKey: "language"); Lang.override = language; onChange?() }
+    }
     @Published var updating = false
     @Published var switching: String?
     @Published var refreshing = false
@@ -147,13 +151,13 @@ final class AppModel: ObservableObject {
 
     /// 菜单里的「检查更新」：给出明确反馈
     func checkUpdateManually() {
-        say("正在检查更新…")
+        say(L("正在检查更新…", "Checking for updates…"))
         Task {
             if let u = await Updater.check() {
                 update = u
-                say("发现新版本 v\(u.version)，点击右上角「更新」即可升级")
+                say(L("发现新版本 v\(u.version)，点击右上角「更新」即可升级", "New version v\(u.version) available. Click Update at the top right to upgrade"))
             } else {
-                say("已是最新版本 v\(Updater.currentVersion)")
+                say(L("已是最新版本 v\(Updater.currentVersion)", "You are on the latest version (v\(Updater.currentVersion))"))
             }
         }
     }
@@ -167,7 +171,7 @@ final class AppModel: ObservableObject {
                 NSApp.terminate(nil)
             } catch {
                 updating = false
-                say("更新失败：\(error.localizedDescription)")
+                say(L("更新失败：\(error.localizedDescription)", "Update failed: \(error.localizedDescription)"))
             }
         }
     }
@@ -252,11 +256,11 @@ final class AppModel: ObservableObject {
                 accounts = acc.provider == .codex ? try await AccountStore.switchToCodex(acc, accounts: accounts)
                                                   : try await AccountStore.switchTo(acc, accounts: accounts)
                 reloadLive()
-                var note = acc.provider == .codex ? "新会话立即生效，已打开的 Codex 需重启" : "新会话立即生效，IDE 需重启"
+                var note = acc.provider == .codex ? L("新会话立即生效，已打开的 Codex 需重启", "Effective for new sessions; restart any open Codex") : L("新会话立即生效，IDE 需重启", "Effective for new sessions; restart your IDE")
                 if acc.provider == .claude, syncDesktop, ClaudeDesktop.installed, desktopSaved.contains(acc.id) || desktopOwner == acc.id {
-                    if desktopOwner != acc.id { note = await switchDesktop(acc, quiet: true) ? "桌面端已同步，" + note : note }
+                    if desktopOwner != acc.id { note = await switchDesktop(acc, quiet: true) ? L("桌面端已同步，", "Desktop synced. ") + note : note }
                 }
-                say("已切换到 \(acc.name) · \(note)")
+                say(L("已切换到 \(acc.name) · \(note)", "Switched to \(acc.name) · \(note)"))
                 await refreshAllNow()
             } catch {
                 say(error.localizedDescription)
@@ -268,7 +272,7 @@ final class AppModel: ObservableObject {
     // MARK: 添加：保存当前登录会话
 
     func beginSaveCurrent() {
-        guard let l = currentLive else { say("当前没有 \(provider.title) 登录会话"); return }
+        guard let l = currentLive else { say(L("当前没有 \(provider.title) 登录会话", "No \(provider.title) login session found")); return }
         draftName = AccountStore.suggestName(email: l.email, existing: accounts)
         formError = nil
         route = .save
@@ -288,7 +292,7 @@ final class AppModel: ObservableObject {
                     let acc = provider == .codex ? try await AccountStore.addCurrentCodex(name: draftName, existing: accounts)
                                                  : try await AccountStore.addCurrent(name: draftName, existing: accounts)
                     accounts.append(acc)
-                    say("已添加账号 \(acc.name)")
+                    say(L("已添加账号 \(acc.name)", "Added account \(acc.name)"))
                 case .rename(let id):
                     accounts = try AccountStore.rename(id, to: draftName, in: accounts)
                 default: return
@@ -318,7 +322,7 @@ final class AppModel: ObservableObject {
         loginProc = proc
         loginTask = Task {
             guard let exe = await ClaudeCLI.executable() else {
-                loginNote = "没有找到 claude 命令行，请先安装 Claude Code"
+                loginNote = L("没有找到 claude 命令行，请先安装 Claude Code", "The claude command was not found. Please install Claude Code first")
                 await proc.cleanup()
                 return
             }
@@ -326,7 +330,7 @@ final class AppModel: ObservableObject {
             do {
                 try proc.start(executable: exe, email: expect?.email) { code, tail in exitBox.set(code, tail) }
             } catch {
-                loginNote = "无法启动 claude：\(error.localizedDescription)"
+                loginNote = L("无法启动 claude：\(error.localizedDescription)", "Could not launch claude: \(error.localizedDescription)")
                 await proc.cleanup()
                 return
             }
@@ -339,7 +343,7 @@ final class AppModel: ObservableObject {
                     return
                 }
             }
-            loginNote = "登录超时，请重试"
+            loginNote = L("登录超时，请重试", "Login timed out. Please try again")
             await proc.cleanup()
         }
     }
@@ -347,40 +351,40 @@ final class AppModel: ObservableObject {
     private func finishLogin(_ proc: LoginProcess, code: Int32, tail: String, expect: Account?) async {
         defer { Task { await proc.cleanup() } }
         guard code == 0 || proc.succeeded else {
-            loginNote = tail.isEmpty ? "登录进程已退出（\(code)）" : tail
+            loginNote = tail.isEmpty ? L("登录进程已退出（\(code)）", "The login process exited (\(code))") : tail
             return
         }
         guard let cred = await Keychain.read(service: proc.keychainService), let oauth = proc.oauthAccount(),
               let uuid = oauth["accountUuid"]?.string else {
-            loginNote = "登录完成，但没能读到新账号的凭证，请重试"
+            loginNote = L("登录完成，但没能读到新账号的凭证，请重试", "Login finished, but the new account's credentials could not be read. Please try again")
             return
         }
         let email = oauth["emailAddress"]?.string ?? ""
         do {
             if let known = accounts.first(where: { $0.uuid == uuid }) {
                 if expect != nil && expect?.id != known.id {
-                    loginNote = "登录的是 \(email)，不是要重新登录的账号，请重试"
+                    loginNote = L("登录的是 \(email)，不是要重新登录的账号，请重试", "You logged in as \(email), which is not the account to re-login. Please try again")
                 } else if expect != nil {
                     accounts = try await AccountStore.replaceCredential(known, cred: cred, oauth: oauth, in: accounts)
                     status[known.id] = nil
                     route = .list
-                    say("\(known.name) 已重新登录")
+                    say(L("\(known.name) 已重新登录", "\(known.name) has been logged in again"))
                     await refreshAllNow()
                 } else {
                     loginSame = true
-                    loginNote = "登录的是「\(known.name)」（\(email)），已经在列表里了，没有新账号。\n请先在浏览器里退出当前账号，或换用其他浏览器打开链接，再重试。"
+                    loginNote = L("登录的是「\(known.name)」（\(email)），已经在列表里了，没有新账号。\n请先在浏览器里退出当前账号，或换用其他浏览器打开链接，再重试。", "You logged in as \"\(known.name)\" (\(email)), which is already in the list, so no new account was added.\nSign out in the browser first, or open the link in another browser, then try again.")
                 }
                 return
             }
             if let exp = expect {
-                loginNote = "登录的是 \(email)，不是「\(exp.name)」（\(exp.email)），请重试"
+                loginNote = L("登录的是 \(email)，不是「\(exp.name)」（\(exp.email)），请重试", "You logged in as \(email), not \"\(exp.name)\" (\(exp.email)). Please try again")
                 return
             }
             let name = AccountStore.suggestName(email: email, existing: accounts)
             let acc = try await AccountStore.add(name: name, cred: cred, oauth: oauth, existing: accounts)
             accounts.append(acc)
             route = .list
-            say("已添加 \(acc.name)，当前登录未改变")
+            say(L("已添加 \(acc.name)，当前登录未改变", "Added \(acc.name). Your current login is unchanged"))
             await refreshAllNow()
         } catch {
             loginNote = error.localizedDescription
@@ -398,7 +402,7 @@ final class AppModel: ObservableObject {
         guard let u = loginURL else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(u, forType: .string)
-        say("授权链接已复制")
+        say(L("授权链接已复制", "Authorization link copied"))
     }
 
     func cancelRoute() {
@@ -418,7 +422,7 @@ final class AppModel: ObservableObject {
                 usage[acc.id] = nil
                 status[acc.id] = nil
                 onChange?()
-                say("已移除 \(acc.name)（当前 \(acc.provider.title) 登录不受影响）")
+                say(L("已移除 \(acc.name)（当前 \(acc.provider.title) 登录不受影响）", "Removed \(acc.name) (your current \(acc.provider.title) login is unaffected)"))
             } catch { say(error.localizedDescription) }
         }
     }
@@ -428,7 +432,7 @@ final class AppModel: ObservableObject {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             launchAtLogin = SMAppService.mainApp.status == .enabled
         } catch {
-            say("设置开机启动失败：\(error.localizedDescription)")
+            say(L("设置开机启动失败：\(error.localizedDescription)", "Failed to set launch at login: \(error.localizedDescription)"))
             launchAtLogin = SMAppService.mainApp.status == .enabled
         }
     }

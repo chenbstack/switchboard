@@ -38,7 +38,7 @@ enum ClaudeLive {
     }
 
     static func setOAuthAccount(_ acct: JSONValue) throws {
-        guard var j = FileJSON.read(claudeJSON) else { throw AppError("无法读取 ~/.claude.json") }
+        guard var j = FileJSON.read(claudeJSON) else { throw AppError(L("无法读取 ~/.claude.json", "Could not read ~/.claude.json")) }
         // 首次改写前留一份备份
         let bak = claudeJSON.appendingPathExtension("switchboard.bak")
         if !FileManager.default.fileExists(atPath: bak.path) { try? FileManager.default.copyItem(at: claudeJSON, to: bak) }

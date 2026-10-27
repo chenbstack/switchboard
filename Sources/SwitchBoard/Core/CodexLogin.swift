@@ -69,7 +69,7 @@ final class CodexLogin: @unchecked Sendable {
         params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: Self.port)!)
         let l = try NWListener(using: params)
         l.stateUpdateHandler = { [weak self] st in
-            if case .failed = st { self?.finish(.failure(AppError("本机 1455 端口被占用（可能有 codex 登录正在进行），请稍后重试"))) }
+            if case .failed = st { self?.finish(.failure(AppError(L("本机 1455 端口被占用（可能有 codex 登录正在进行），请稍后重试", "Port 1455 is in use (a codex login may be in progress). Please try again later")))) }
         }
         l.newConnectionHandler = { [weak self] conn in self?.handle(conn) }
         l.start(queue: .global())
@@ -86,15 +86,15 @@ final class CodexLogin: @unchecked Sendable {
             guard url.path == "/auth/callback" else { self.reply(conn, 404, "Not Found"); return }
             let q = Dictionary(url.queryItems?.compactMap { i in i.value.map { (i.name, $0) } } ?? [], uniquingKeysWith: { a, _ in a })
             if let err = q["error"] {
-                self.reply(conn, 400, "登录失败：\(q["error_description"] ?? err)，可以回到 SwitchBoard 重试。")
-                self.finish(.failure(AppError("授权失败：\(q["error_description"] ?? err)")))
+                self.reply(conn, 400, L(L("登录失败：\(q["error_description"] ?? err)，可以回到 SwitchBoard 重试。", "Login failed: \(q["error_description"] ?? err). You can go back to SwitchBoard and retry."), "Login failed: \(q["error_description"] ?? err). You can go back to SwitchBoard and retry."))
+                self.finish(.failure(AppError(L("授权失败：\(q["error_description"] ?? err)", "Authorization failed: \(q["error_description"] ?? err)"))))
             } else if q["state"] != self.state {
                 self.reply(conn, 400, "State mismatch")
             } else if let code = q["code"] {
-                self.reply(conn, 200, "登录成功，可以关闭此页面，回到 SwitchBoard。")
+                self.reply(conn, 200, L("登录成功，可以关闭此页面，回到 SwitchBoard。", "Login successful. You can close this page and return to SwitchBoard."))
                 Task { self.finish(await self.exchange(code: code)) }
             } else {
-                self.reply(conn, 400, "缺少授权码")
+                self.reply(conn, 400, L("缺少授权码", "Missing authorization code"))
             }
         }
     }
@@ -122,7 +122,7 @@ final class CodexLogin: @unchecked Sendable {
             guard (resp as? HTTPURLResponse)?.statusCode == 200,
                   let r = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                   let idt = r["id_token"] as? String, let at = r["access_token"] as? String, let rt = r["refresh_token"] as? String
-            else { return .failure(AppError("换取登录凭证失败（\((resp as? HTTPURLResponse)?.statusCode ?? 0)）")) }
+            else { return .failure(AppError(L("换取登录凭证失败（\((resp as? HTTPURLResponse)?.statusCode ?? 0)）", "Failed to exchange the login credentials (\((resp as? HTTPURLResponse)?.statusCode ?? 0))"))) }
             let claims = JWT.claims(idt)?["https://api.openai.com/auth"] as? [String: Any]
             var tokens: [String: Any] = ["id_token": idt, "access_token": at, "refresh_token": rt]
             if let a = claims?["chatgpt_account_id"] as? String { tokens["account_id"] = a }

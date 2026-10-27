@@ -127,7 +127,7 @@ struct MeterLine: View {
                     .lineLimit(1).minimumScaleFactor(0.85)
             }
             .frame(width: 106, alignment: .trailing)
-            .help("重置时间：\(clock(meter.resetsAt))")
+            .help(L("重置时间：\(clock(meter.resetsAt))", "Resets at \(clock(meter.resetsAt))"))
         }
         .onAppear { withAnimation(.spring(response: 0.7, dampingFraction: 0.85)) { shown = meter.remaining } }
         .onChange(of: meter.remaining) { _, v in withAnimation(.spring(response: 0.7, dampingFraction: 0.85)) { shown = v } }
@@ -177,12 +177,12 @@ struct DesktopChip: View {
             Image(systemName: "macwindow").font(.system(size: 9.5, weight: .bold))
                 .foregroundStyle(Theme.good).frame(width: 20, height: 18)
                 .background(Theme.good.opacity(0.18), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .help("Claude 桌面端：正在使用此账号")
+                .help(L("Claude 桌面端：正在使用此账号", "Claude Desktop: using this account"))
         case .saved:
             Image(systemName: "macwindow").font(.system(size: 9.5, weight: .semibold))
                 .foregroundStyle(Theme.text2).frame(width: 20, height: 18)
                 .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(.white.opacity(0.28), lineWidth: 0.8))
-                .help("Claude 桌面端：已保存此账号的登录，切换时会同步")
+                .help(L("Claude 桌面端：已保存此账号的登录，切换时会同步", "Claude Desktop: login saved for this account; it syncs when you switch"))
         }
     }
 }

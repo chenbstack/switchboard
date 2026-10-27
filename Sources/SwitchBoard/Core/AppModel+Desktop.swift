@@ -21,11 +21,11 @@ extension AppModel {
         do {
             try await ClaudeDesktop.switchOwner(to: acc.id, forceLaunch: forceLaunch)
             reloadDesktop()
-            if !quiet { say("Claude 桌面端已切换到 \(acc.name)") }
+            if !quiet { say(L("Claude 桌面端已切换到 \(acc.name)", "Claude Desktop switched to \(acc.name)")) }
             return true
         } catch {
             reloadDesktop()
-            say("桌面端切换失败：\(error.localizedDescription)")
+            say(L("桌面端切换失败：\(error.localizedDescription)", "Failed to switch Claude Desktop: \(error.localizedDescription)"))
             return false
         }
     }
@@ -35,8 +35,8 @@ extension AppModel {
         do {
             try ClaudeDesktop.bindCurrent(to: acc.id)
             reloadDesktop()
-            say("已把 Claude 桌面端当前登录绑定到 \(acc.name)")
-        } catch { say("绑定失败：\(error.localizedDescription)") }
+            say(L("已把 Claude 桌面端当前登录绑定到 \(acc.name)", "Bound the current Claude Desktop login to \(acc.name)"))
+        } catch { say(L("绑定失败：\(error.localizedDescription)", "Binding failed: \(error.localizedDescription)")) }
     }
 
     /// 为没有快照的账号新登录桌面端：把现有桌面端数据收起来，打开一个全新的登录界面
@@ -48,15 +48,15 @@ extension AppModel {
             do {
                 try await ClaudeDesktop.switchOwner(to: acc.id, forceLaunch: true)
                 reloadDesktop()
-                say("请在 Claude 桌面端登录 \(acc.email.isEmpty ? acc.name : acc.email)，登录后会自动归到该账号")
-            } catch { reloadDesktop(); say("桌面端操作失败：\(error.localizedDescription)") }
+                say(L("请在 Claude 桌面端登录 \(acc.email.isEmpty ? acc.name : acc.email)，登录后会自动归到该账号", "Log in to Claude Desktop as \(acc.email.isEmpty ? acc.name : acc.email); it will be linked to this account automatically"))
+            } catch { reloadDesktop(); say(L("桌面端操作失败：\(error.localizedDescription)", "Claude Desktop operation failed: \(error.localizedDescription)")) }
         }
     }
 
     func unbindDesktop(_ acc: Account) {
         ClaudeDesktop.forget(acc.id)
         reloadDesktop()
-        say("已解除 \(acc.name) 的桌面端绑定")
+        say(L("已解除 \(acc.name) 的桌面端绑定", "Unbound Claude Desktop from \(acc.name)"))
     }
 }
 

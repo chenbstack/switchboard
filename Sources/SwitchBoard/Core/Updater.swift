@@ -42,14 +42,14 @@ enum Updater {
     /// 下载并准备好替换；成功后调用方应立即退出 App（脚本会等它退出后完成替换并重新打开）
     static func install(_ info: UpdateInfo) async throws {
         let app = Bundle.main.bundleURL
-        guard app.pathExtension == "app" else { throw AppError("当前不是从 .app 运行，无法自动更新") }
+        guard app.pathExtension == "app" else { throw AppError(L("当前不是从 .app 运行，无法自动更新", "Not running from an .app bundle; cannot auto-update")) }
         guard FileManager.default.isWritableFile(atPath: app.deletingLastPathComponent().path) else {
-            throw AppError("没有权限写入 \(app.deletingLastPathComponent().path)，请手动更新")
+            throw AppError(L("没有权限写入 \(app.deletingLastPathComponent().path)，请手动更新", "No permission to write to \(app.deletingLastPathComponent().path). Please update manually"))
         }
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("SwitchBoard-update-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         let (tmp, resp) = try await URLSession.shared.download(from: info.url)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw AppError("下载失败") }
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw AppError(L("下载失败", "Download failed")) }
         let zip = work.appendingPathComponent("update.zip")
         try FileManager.default.moveItem(at: tmp, to: zip)
 
@@ -57,7 +57,7 @@ enum Updater {
         try run("/usr/bin/ditto", ["-x", "-k", zip.path, out.path])
         let new = out.appendingPathComponent(app.lastPathComponent)
         guard FileManager.default.fileExists(atPath: new.appendingPathComponent("Contents/MacOS").path) else {
-            throw AppError("更新包内容不正确")
+            throw AppError(L("更新包内容不正确", "The update package is invalid"))
         }
 
         let script = """
@@ -80,6 +80,6 @@ enum Updater {
         p.arguments = args
         try p.run()
         p.waitUntilExit()
-        guard p.terminationStatus == 0 else { throw AppError("解压更新包失败") }
+        guard p.terminationStatus == 0 else { throw AppError(L("解压更新包失败", "Failed to unpack the update")) }
     }
 }

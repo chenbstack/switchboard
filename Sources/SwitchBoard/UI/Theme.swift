@@ -1,5 +1,20 @@
 import SwiftUI
 
+/// 界面语言：设置里选了就用选的，否则跟随系统首选语言（中文 → 中文，其余 → 英文）
+enum Lang {
+    nonisolated(unsafe) static var override: String = UserDefaults.standard.string(forKey: "language") ?? "auto"
+    static var isZh: Bool {
+        switch override {
+        case "zh": return true
+        case "en": return false
+        default: return Locale.preferredLanguages.first?.hasPrefix("zh") ?? false
+        }
+    }
+    static var locale: Locale { Locale(identifier: isZh ? "zh_CN" : "en_US") }
+}
+
+func L(_ zh: String, _ en: String) -> String { Lang.isZh ? zh : en }
+
 enum Theme {
     static let panelWidth: CGFloat = 380
     /// 当前展示的 provider，主题色随它变化（Claude 橙 / Codex 紫）
@@ -40,18 +55,18 @@ enum Theme {
 func relative(_ date: Date?, now: Date = Date()) -> String {
     guard let date else { return "—" }
     let s = Int(date.timeIntervalSince(now))
-    if s <= 0 { return "即将" }
+    if s <= 0 { return L("即将", "soon") }
     let m = (s + 59) / 60
-    if m < 60 { return "\(m) 分钟后" }
-    if m < 1440 { return "\(m / 60) 小时 \(m % 60) 分后" }
-    return "\(m / 1440) 天 \((m % 1440) / 60) 小时后"
+    if m < 60 { return L("\(m) 分钟后", "in \(m) min") }
+    if m < 1440 { return L("\(m / 60) 小时 \(m % 60) 分后", "in \(m / 60)h \(m % 60)m") }
+    return L("\(m / 1440) 天 \((m % 1440) / 60) 小时后", "in \(m / 1440)d \((m % 1440) / 60)h")
 }
 
 func clock(_ date: Date?) -> String {
     guard let date else { return "" }
     let f = DateFormatter()
-    f.locale = Locale(identifier: "zh_CN")
-    f.dateFormat = Calendar.current.isDateInToday(date) ? "今天 HH:mm" : "M月d日 HH:mm"
+    f.locale = Lang.locale
+    f.dateFormat = Calendar.current.isDateInToday(date) ? L("今天 HH:mm", "'Today' HH:mm") : L("M月d日 HH:mm", "MMM d HH:mm")
     return f.string(from: date)
 }
 
@@ -68,7 +83,7 @@ func compact(_ date: Date?, now: Date = Date()) -> String {
 func resetShort(_ date: Date?, now: Date = Date()) -> String {
     guard let date else { return "—" }
     let f = DateFormatter()
-    f.locale = Locale(identifier: "zh_CN")
+    f.locale = Lang.locale
     f.dateFormat = Calendar.current.isDateInToday(date) ? "HH:mm" : "M/d HH:mm"
     return "\(compact(date, now: now)) · \(f.string(from: date))"
 }

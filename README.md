@@ -9,7 +9,7 @@ English · [简体中文](README.zh-CN.md)
 [![Release](https://img.shields.io/github/v/release/chenbstack/switchboard?color=f97316)](https://github.com/chenbstack/switchboard/releases/latest)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black)
 
-<img src="docs/screenshot-claude.png" width="300" alt="SwitchBoard showing Claude accounts"> <img src="docs/screenshot-codex.png" width="300" alt="SwitchBoard showing Codex accounts">
+<img src="docs/screenshot-claude-en.png" width="300" alt="SwitchBoard showing Claude accounts"> <img src="docs/screenshot-codex-en.png" width="300" alt="SwitchBoard showing Codex accounts">
 
 <sub>Screenshots use demo data.</sub>
 
@@ -24,6 +24,7 @@ English · [简体中文](README.zh-CN.md)
 - **Add accounts in place** — save your current login, or sign in to another account without touching the one you're using.
 - **Cached quota** — the last known numbers show instantly on launch; refreshes run one account at a time.
 - **Auto-update** — an *Update* button appears in the panel when a new release is out. One click and it restarts on the new version.
+- **English & 简体中文** UI — follows your system language, or pick one in the ⋯ menu.
 - Launch at login, dark UI that follows the active provider's accent colour.
 
 ## Install

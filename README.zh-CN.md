@@ -9,7 +9,7 @@
 [![Release](https://img.shields.io/github/v/release/chenbstack/switchboard?color=f97316)](https://github.com/chenbstack/switchboard/releases/latest)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black)
 
-<img src="docs/screenshot-claude.png" width="300" alt="SwitchBoard 的 Claude 账号列表"> <img src="docs/screenshot-codex.png" width="300" alt="SwitchBoard 的 Codex 账号列表">
+<img src="docs/screenshot-claude-zh.png" width="300" alt="SwitchBoard 的 Claude 账号列表"> <img src="docs/screenshot-codex-zh.png" width="300" alt="SwitchBoard 的 Codex 账号列表">
 
 <sub>截图为演示数据。</sub>
 
@@ -24,6 +24,7 @@
 - **就地添加账号**：保存当前登录的账号，或登录另一个账号而不影响正在使用的账号。
 - **额度缓存**：启动时先显示上次的数据，刷新时逐个账号串行请求。
 - **自动更新**：有新版本时面板右上角出现「更新」按钮，点一下即可升级并自动重启。
+- **中英双语界面**：默认跟随系统语言，也可以在 ⋯ 菜单里手动切换。
 - 支持开机启动；深色界面，主题色随当前服务（Claude / Codex）变化。
 
 ## 安装

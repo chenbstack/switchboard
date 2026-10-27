@@ -57,7 +57,7 @@ struct UpdateButton: View {
             HStack(spacing: 4) {
                 if busy { ProgressView().controlSize(.mini).scaleEffect(0.7) }
                 else { Image(systemName: "arrow.down.circle.fill").font(.system(size: 11, weight: .bold)) }
-                Text(busy ? "更新中" : "更新").font(.system(size: 11.5, weight: .semibold))
+                Text(busy ? L("更新中", "Updating") : L("更新", "Update")).font(.system(size: 11.5, weight: .semibold))
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 10).frame(height: 26)
@@ -65,7 +65,7 @@ struct UpdateButton: View {
             .shadow(color: Theme.accent.opacity(0.4), radius: 6, y: 1)
         }
         .buttonStyle(.plain).disabled(busy)
-        .help("发现新版本 v\(version)，点击更新并重启")
+        .help(L("发现新版本 v\(version)，点击更新并重启", "New version v\(version) available. Click to update and restart"))
     }
 }
 
@@ -76,7 +76,7 @@ struct HeaderBar: View {
             Menu {
                 ForEach(Provider.allCases) { p in
                     Button { model.provider = p } label: {
-                        Label("\(p.title) · \(model.count(p)) 个账号", systemImage: model.provider == p ? "checkmark" : p.symbol)
+                        Label(L("\(p.title) · \(model.count(p)) 个账号", "\(p.title) · \(model.count(p)) account\(model.count(p) == 1 ? "" : "s")"), systemImage: model.provider == p ? "checkmark" : p.symbol)
                     }
                 }
             } label: {
@@ -94,7 +94,7 @@ struct HeaderBar: View {
                             Text(model.provider.title).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text1)
                             Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.text2)
                         }
-                        Text(model.shown.isEmpty ? "尚未添加账号" : "\(model.shown.count) 个账号")
+                        Text(model.shown.isEmpty ? L("尚未添加账号", "No accounts yet") : L("\(model.shown.count) 个账号", "\(model.shown.count) account\(model.shown.count == 1 ? "" : "s")"))
                             .font(.system(size: 11)).foregroundStyle(Theme.text2)
                     }
                 }
@@ -105,17 +105,22 @@ struct HeaderBar: View {
             if let u = model.update { UpdateButton(version: u.version, busy: model.updating) { model.installUpdate() } }
             IconButton(symbol: "arrow.clockwise", spinning: model.manualRefreshing) { model.refreshManually() }
             Menu {
-                Toggle("开机启动", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+                Toggle(L("开机启动", "Launch at login"), isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
                 if ClaudeDesktop.installed, model.provider == .claude {
-                    Toggle("切换账号时同步 Claude 桌面端", isOn: $model.syncDesktop)
+                    Toggle(L("切换账号时同步 Claude 桌面端", "Sync Claude Desktop when switching"), isOn: $model.syncDesktop)
+                }
+                Picker("Language / 语言", selection: $model.language) {
+                    Text("Auto / 跟随系统").tag("auto")
+                    Text("English").tag("en")
+                    Text("简体中文").tag("zh")
                 }
                 Divider()
                 if let u = model.update {
-                    Button("更新到 v\(u.version)") { model.installUpdate() }.disabled(model.updating)
+                    Button(L("更新到 v\(u.version)", "Update to v\(u.version)")) { model.installUpdate() }.disabled(model.updating)
                 } else {
-                    Button("检查更新（当前 v\(Updater.currentVersion)）") { model.checkUpdateManually() }
+                    Button(L("检查更新（当前 v\(Updater.currentVersion)）", "Check for updates (current v\(Updater.currentVersion))")) { model.checkUpdateManually() }
                 }
-                Button("退出 SwitchBoard") { NSApp.terminate(nil) }
+                Button(L("退出 SwitchBoard", "Quit SwitchBoard")) { NSApp.terminate(nil) }
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.text2)
@@ -179,31 +184,31 @@ struct AccountCard: View {
         if isActive {
             HStack(spacing: 5) {
                 Circle().fill(Theme.good).frame(width: 6, height: 6).shadow(color: Theme.good.opacity(0.9), radius: 4)
-                Text("使用中").font(.system(size: 11, weight: .medium))
+                Text(L("使用中", "In use")).font(.system(size: 11, weight: .medium))
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(Theme.good.opacity(0.14), in: Capsule())
             .foregroundStyle(Theme.good)
         } else if confirmDelete {
-            Button("确认移除") { model.remove(acc) }.buttonStyle(PillButton(fill: Theme.bad))
+            Button(L("确认移除", "Confirm remove")) { model.remove(acc) }.buttonStyle(PillButton(fill: Theme.bad))
         } else if hover || busy {
             HStack(spacing: 6) {
                 Button { confirmDelete = true } label: { Image(systemName: "trash") }
                     .buttonStyle(PillButton(fill: .white.opacity(0.08), textColor: Theme.text2, compact: true))
                 if status == .needsLogin {
-                    Button("重新登录") { model.beginLogin(expect: acc) }.buttonStyle(PillButton(fill: Theme.accent))
+                    Button(L("重新登录", "Log in again")) { model.beginLogin(expect: acc) }.buttonStyle(PillButton(fill: Theme.accent))
                 } else {
                     Button {
                         model.switchTo(acc)
                     } label: {
-                        if busy { ProgressView().controlSize(.small).scaleEffect(0.65).frame(width: 24) } else { Text("切换") }
+                        if busy { ProgressView().controlSize(.small).scaleEffect(0.65).frame(width: 24) } else { Text(L("切换", "Switch")) }
                     }
                     .buttonStyle(PillButton(fill: Theme.accent))
                 }
             }
             .transition(.opacity)
         } else if isBest {
-            Text("最空闲").font(.system(size: 10.5, weight: .bold))
+            Text(L("最空闲", "Least busy")).font(.system(size: 10.5, weight: .bold))
                 .padding(.horizontal, 9).padding(.vertical, 5)
                 .background(Theme.good.opacity(0.16), in: Capsule()).foregroundStyle(Theme.good)
         }
@@ -212,12 +217,12 @@ struct AccountCard: View {
     @ViewBuilder var body_: some View {
         if let u = usage {
             VStack(spacing: 8) {
-                if let m = u.session { MeterLine(title: "5 小时", meter: m) }
-                if let m = u.weekly { MeterLine(title: "每周", meter: m) }
+                if let m = u.session { MeterLine(title: L("5 小时", "5-hour"), meter: m) }
+                if let m = u.weekly { MeterLine(title: L("每周", "Weekly"), meter: m) }
                 if let m = u.opus { MeterLine(title: "Opus", meter: m) }
                 if let m = u.sonnet { MeterLine(title: "Sonnet", meter: m) }
                 if u.session == nil && u.weekly == nil {
-                    Text("暂无额度数据").font(.system(size: 11)).foregroundStyle(Theme.text2)
+                    Text(L("暂无额度数据", "No quota data")).font(.system(size: 11)).foregroundStyle(Theme.text2)
                 }
                 if case .error(let m) = status {
                     Label(m, systemImage: "exclamationmark.triangle.fill").font(.system(size: 10.5)).foregroundStyle(Theme.warn)
@@ -259,9 +264,9 @@ struct LoginHint: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "key.slash").foregroundStyle(Theme.warn)
-            Text("登录已失效").font(.system(size: 11.5)).foregroundStyle(Theme.text2)
+            Text(L("登录已失效", "Login expired")).font(.system(size: 11.5)).foregroundStyle(Theme.text2)
             Spacer()
-            Button("重新登录") { model.beginLogin(expect: acc) }
+            Button(L("重新登录", "Log in again")) { model.beginLogin(expect: acc) }
                 .buttonStyle(PillButton(fill: .white.opacity(0.14), textColor: Theme.text1, compact: true))
         }
         .padding(10)
@@ -273,23 +278,23 @@ struct AccountMenu: View {
     @ObservedObject var model: AppModel
     let acc: Account
     var body: some View {
-        Button("重命名…") { model.beginRename(acc) }
-        Button("刷新额度") { model.refreshManually() }
+        Button(L("重命名…", "Rename…")) { model.beginRename(acc) }
+        Button(L("刷新额度", "Refresh quota")) { model.refreshManually() }
         if acc.provider == .claude, ClaudeDesktop.installed {
             Divider()
             switch model.desktopMark(acc) {
             case .active:
-                Button("解除桌面端绑定") { model.unbindDesktop(acc) }
+                Button(L("解除桌面端绑定", "Unbind Claude Desktop")) { model.unbindDesktop(acc) }
             case .saved:
-                Button("切换桌面端到此账号") { Task { await model.switchDesktop(acc) } }
-                Button("解除桌面端绑定") { model.unbindDesktop(acc) }
+                Button(L("切换桌面端到此账号", "Switch Claude Desktop to this account")) { Task { await model.switchDesktop(acc) } }
+                Button(L("解除桌面端绑定", "Unbind Claude Desktop")) { model.unbindDesktop(acc) }
             case .none:
-                Button("把当前桌面端登录绑定到此账号") { model.bindDesktop(acc) }
-                Button("为此账号新登录桌面端…") { model.loginDesktopFresh(acc) }
+                Button(L("把当前桌面端登录绑定到此账号", "Bind current Claude Desktop login to this account")) { model.bindDesktop(acc) }
+                Button(L("为此账号新登录桌面端…", "Log in to Claude Desktop as this account…")) { model.loginDesktopFresh(acc) }
             }
         }
         Divider()
-        Button("移除账号", role: .destructive) { model.remove(acc) }
+        Button(L("移除账号", "Remove account"), role: .destructive) { model.remove(acc) }
     }
 }
 
@@ -302,12 +307,12 @@ struct UnsavedCard: View {
         HStack(spacing: 11) {
             Image(systemName: "person.crop.circle.badge.plus").font(.system(size: 24)).foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(model.provider.title) 当前登录的账号").font(.system(size: 12.5, weight: .semibold))
+                Text(L("\(model.provider.title) 当前登录的账号", "Account currently logged in to \(model.provider.title)")).font(.system(size: 12.5, weight: .semibold))
                 Text(live.email).font(.system(size: 11)).foregroundStyle(Theme.text2).lineLimit(1).truncationMode(.middle)
-                Text("添加后可查看额度，并一键切换").font(.system(size: 10.5)).foregroundStyle(Theme.text3)
+                Text(L("添加后可查看额度，并一键切换", "Add it to see quota and switch in one click")).font(.system(size: 10.5)).foregroundStyle(Theme.text3)
             }
             Spacer()
-            Button("添加") { model.beginSaveCurrent() }.buttonStyle(PillButton(fill: Theme.accent))
+            Button(L("添加", "Add")) { model.beginSaveCurrent() }.buttonStyle(PillButton(fill: Theme.accent))
         }
         .padding(14)
         .background(Theme.accent.opacity(0.13), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -322,7 +327,7 @@ struct AddBar: View {
         Button { model.beginLogin() } label: {
             HStack(spacing: 6) {
                 Image(systemName: "plus")
-                Text("登录另一个账号")
+                Text(L("登录另一个账号", "Log in to another account"))
             }
             .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.text2)
             .frame(maxWidth: .infinity).padding(.vertical, 11)
@@ -344,13 +349,13 @@ struct NameForm: View {
                 HStack(spacing: 11) {
                     Avatar(key: model.currentLive?.uuid ?? model.draftName, label: model.draftName.isEmpty ? "?" : model.draftName, size: 40)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(isSave ? "添加当前登录账号" : "重命名账号").font(.system(size: 14, weight: .semibold))
+                        Text(isSave ? L("添加当前登录账号", "Add current account") : L("重命名账号", "Rename account")).font(.system(size: 14, weight: .semibold))
                         if isSave { Text(model.currentLive?.email ?? "").font(.system(size: 11)).foregroundStyle(Theme.text2) }
                     }
                 }
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("账号名称").font(.system(size: 11)).foregroundStyle(Theme.text2)
-                    TextField("例如 work", text: $model.draftName)
+                    Text(L("账号名称", "Account name")).font(.system(size: 11)).foregroundStyle(Theme.text2)
+                    TextField(L("例如 work", "e.g. work"), text: $model.draftName)
                         .textFieldStyle(.plain).font(.system(size: 13))
                         .padding(.horizontal, 12).padding(.vertical, 9)
                         .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -362,8 +367,8 @@ struct NameForm: View {
                 }
                 HStack {
                     Spacer()
-                    Button("取消") { model.cancelRoute() }.buttonStyle(PillButton(fill: .white.opacity(0.1), textColor: Theme.text1))
-                    Button(isSave ? "添加" : "保存") { model.confirmForm() }.buttonStyle(PillButton(fill: Theme.accent))
+                    Button(L("取消", "Cancel")) { model.cancelRoute() }.buttonStyle(PillButton(fill: .white.opacity(0.1), textColor: Theme.text1))
+                    Button(isSave ? L("添加", "Add") : L("保存", "Save")) { model.confirmForm() }.buttonStyle(PillButton(fill: Theme.accent))
                 }
             }
         }
@@ -379,26 +384,26 @@ struct WaitingLogin: View {
                 if let note = model.loginNote {
                     Image(systemName: model.loginSame ? "person.crop.circle.badge.exclamationmark" : "exclamationmark.triangle.fill")
                         .font(.system(size: 24)).foregroundStyle(Theme.warn)
-                    Text(model.loginSame ? "没有登录新账号" : "登录没有完成").font(.system(size: 13, weight: .semibold))
+                    Text(model.loginSame ? L("没有登录新账号", "No new account logged in") : L("登录没有完成", "Login did not finish")).font(.system(size: 13, weight: .semibold))
                     Text(note).font(.system(size: 11.5)).foregroundStyle(Theme.text2)
                         .multilineTextAlignment(.center).lineLimit(8)
                     HStack(spacing: 8) {
-                        Button("重试") { model.retryLogin() }.buttonStyle(PillButton(fill: Theme.accent))
-                        Button("取消") { model.cancelRoute() }.buttonStyle(PillButton(fill: .white.opacity(0.1), textColor: Theme.text1))
+                        Button(L("重试", "Retry")) { model.retryLogin() }.buttonStyle(PillButton(fill: Theme.accent))
+                        Button(L("取消", "Cancel")) { model.cancelRoute() }.buttonStyle(PillButton(fill: .white.opacity(0.1), textColor: Theme.text1))
                     }
                 } else {
                     if model.loginURL == nil { ProgressView().controlSize(.regular) }
                     else { Image(systemName: "link.circle.fill").font(.system(size: 26)).foregroundStyle(Theme.accent) }
-                    Text(model.loginURL == nil ? "正在生成授权链接…" : "授权链接已就绪").font(.system(size: 13, weight: .semibold))
-                    Text("用要添加的账号登录。完成后会自动添加到列表，不会改变你当前的 \(model.provider.title) 登录。")
+                    Text(model.loginURL == nil ? L("正在生成授权链接…", "Generating authorization link…") : L("授权链接已就绪", "Authorization link ready")).font(.system(size: 13, weight: .semibold))
+                    Text(L("用要添加的账号登录。完成后会自动添加到列表，不会改变你当前的 \(model.provider.title) 登录。", "Log in with the account you want to add. It is added to the list automatically and your current \(model.provider.title) login is not changed."))
                         .font(.system(size: 11.5)).foregroundStyle(Theme.text2).multilineTextAlignment(.center)
                     HStack(spacing: 8) {
                         if model.loginURL != nil {
-                            Button("在浏览器中打开") { model.openLoginURL() }.buttonStyle(PillButton(fill: Theme.accent))
-                            Button("复制链接") { model.copyLoginURL() }
+                            Button(L("在浏览器中打开", "Open in browser")) { model.openLoginURL() }.buttonStyle(PillButton(fill: Theme.accent))
+                            Button(L("复制链接", "Copy link")) { model.copyLoginURL() }
                                 .buttonStyle(PillButton(fill: .white.opacity(0.14), textColor: Theme.text1))
                         }
-                        Button("取消") { model.cancelRoute() }
+                        Button(L("取消", "Cancel")) { model.cancelRoute() }
                             .buttonStyle(PillButton(fill: .white.opacity(0.1), textColor: Theme.text1))
                     }
                 }
@@ -413,8 +418,8 @@ struct EmptyState: View {
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: "person.2.slash").font(.system(size: 26)).foregroundStyle(Theme.text3)
-            Text("还没有账号").font(.system(size: 13, weight: .semibold))
-            Text(provider == .claude ? "先在 Claude Code 里登录，这里会自动识别并提示添加" : "先登录 Codex（ChatGPT 账号），这里会自动识别；也可以直接点下面的按钮登录").font(.system(size: 11.5)).foregroundStyle(Theme.text2)
+            Text(L("还没有账号", "No accounts yet")).font(.system(size: 13, weight: .semibold))
+            Text(provider == .claude ? L("先在 Claude Code 里登录，这里会自动识别并提示添加", "Log in with Claude Code first; it will be detected here and offered for adding") : L("先登录 Codex（ChatGPT 账号），这里会自动识别；也可以直接点下面的按钮登录", "Log in to Codex (ChatGPT account) first and it will be detected here, or use the button below to log in")).font(.system(size: 11.5)).foregroundStyle(Theme.text2)
         }
         .frame(maxWidth: .infinity).padding(.vertical, 26)
     }
@@ -427,7 +432,7 @@ struct FooterBar: View {
     var body: some View {
         HStack {
             TimelineView(.periodic(from: .now, by: 20)) { ctx in
-                Text(model.lastUpdated.map { "更新于 " + Self.ago($0, ctx.date) } ?? "正在获取额度…")
+                Text(model.lastUpdated.map { L("更新于 ", "Updated ") + Self.ago($0, ctx.date) } ?? L("正在获取额度…", "Fetching quota…"))
                     .font(.system(size: 10.5)).foregroundStyle(Theme.text3)
             }
             Spacer()
@@ -437,9 +442,9 @@ struct FooterBar: View {
 
     static func ago(_ d: Date, _ now: Date) -> String {
         let s = Int(now.timeIntervalSince(d))
-        if s < 15 { return "刚刚" }
-        if s < 60 { return "\(s) 秒前" }
-        return "\(s / 60) 分钟前"
+        if s < 15 { return L("刚刚", "just now") }
+        if s < 60 { return L("\(s) 秒前", "\(s)s ago") }
+        return L("\(s / 60) 分钟前", "\(s / 60)m ago")
     }
 }
 
@@ -447,7 +452,7 @@ struct FooterBar: View {
 /// Codex 把登录存进了钥匙串（没有 auth.json）：读不到，也没法切换
 struct KeyringNotice: View {
     var body: some View {
-        Label("Codex 的登录存在钥匙串里，暂时读不到。在 ~/.codex/config.toml 里设置 cli_auth_credentials_store = \"file\" 并重新登录后即可识别。",
+        Label(L("Codex 的登录存在钥匙串里，暂时读不到。在 ~/.codex/config.toml 里设置 cli_auth_credentials_store = \"file\" 并重新登录后即可识别。", "Codex stores its login in the Keychain, so it cannot be read yet. Set cli_auth_credentials_store = \"file\" in ~/.codex/config.toml and log in again to have it detected."),
               systemImage: "info.circle")
             .font(.system(size: 11)).foregroundStyle(Theme.text2).padding(12)
             .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))

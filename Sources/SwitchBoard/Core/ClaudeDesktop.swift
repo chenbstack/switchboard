@@ -51,7 +51,7 @@ enum ClaudeDesktop {
         if fm.fileExists(atPath: dataDir.path) {
             let name = state.owner ?? "_unassigned-\(Int(Date().timeIntervalSince1970))"
             let dest = slot(name)
-            guard !fm.fileExists(atPath: dest.path) else { throw AppError("桌面端快照位置已被占用：\(dest.lastPathComponent)") }
+            guard !fm.fileExists(atPath: dest.path) else { throw AppError(L("桌面端快照位置已被占用：\(dest.lastPathComponent)", "The Claude Desktop snapshot location is already in use: \(dest.lastPathComponent)")) }
             try fm.moveItem(at: dataDir, to: dest)
             parked = dest
         }
@@ -89,7 +89,7 @@ enum ClaudeDesktop {
         apps.forEach { $0.terminate() }
         if await !waitExit(apps, seconds: 8) {
             apps.forEach { $0.forceTerminate() }
-            if await !waitExit(apps, seconds: 4) { throw AppError("Claude 桌面端没有退出，请手动退出后重试") }
+            if await !waitExit(apps, seconds: 4) { throw AppError(L("Claude 桌面端没有退出，请手动退出后重试", "Claude Desktop did not quit. Please quit it manually and try again")) }
         }
         return true
     }
@@ -113,7 +113,7 @@ enum ClaudeDesktop {
     /// 完整流程：退出 → 换目录 → （之前在运行或 forceLaunch 时）重新打开
     @MainActor
     static func switchOwner(to id: String, forceLaunch: Bool = false) async throws {
-        guard installed else { throw AppError("没有找到 Claude 桌面端（Claude.app）") }
+        guard installed else { throw AppError(L("没有找到 Claude 桌面端（Claude.app）", "Claude Desktop (Claude.app) was not found")) }
         let wasRunning = try await quit()
         try swapFiles(to: id)
         if wasRunning || forceLaunch { launch() }

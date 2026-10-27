@@ -20,7 +20,7 @@ enum CodexService {
         let raw = isActive ? CodexLive.readAuth() : await AccountStore.secret(account)
         guard let raw, var json = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any],
               var tokens = json["tokens"] as? [String: Any],
-              var access = tokens["access_token"] as? String else { return .failed("读不到凭证") }
+              var access = tokens["access_token"] as? String else { return .failed(L("读不到凭证", "Credentials unreadable")) }
         let accountID = tokens["account_id"] as? String
 
         func persist() async {
@@ -82,21 +82,21 @@ enum CodexService {
             switch await refresh() {
             case .some(true): refreshed = true
             case .some(false): return .needsLogin
-            case .none: return .failed("网络异常，无法刷新登录")
+            case .none: return .failed(L("网络异常，无法刷新登录", "Network error; could not refresh the login"))
             }
         }
-        guard var res = await fetch() else { return .failed("网络异常") }
+        guard var res = await fetch() else { return .failed(L("网络异常", "Network error")) }
         if res.0 == 401, !refreshed {
             switch await refresh() {
-            case .some(true): guard let r2 = await fetch() else { return .failed("网络异常") }; res = r2
+            case .some(true): guard let r2 = await fetch() else { return .failed(L("网络异常", "Network error")) }; res = r2
             case .some(false): return .needsLogin
-            case .none: return .failed("网络异常，无法刷新登录")
+            case .none: return .failed(L("网络异常，无法刷新登录", "Network error; could not refresh the login"))
             }
         }
         if res.0 == 401 { return .needsLogin }
-        if res.0 == 429 { return .failed("请求过于频繁，稍后自动重试") }
+        if res.0 == 429 { return .failed(L("请求过于频繁，稍后自动重试", "Too many requests; will retry automatically")) }
         guard res.0 == 200, let j = (try? JSONSerialization.jsonObject(with: res.1)) as? [String: Any] else {
-            return .failed("额度接口返回 \(res.0)")
+            return .failed(L("额度接口返回 \(res.0)", "Quota API returned \(res.0)"))
         }
         return .ok(parse(j))
     }

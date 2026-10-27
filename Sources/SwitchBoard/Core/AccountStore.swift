@@ -73,30 +73,30 @@ enum AccountStore {
 
     static func addCurrent(name: String, existing: [Account]) async throws -> Account {
         let name = name.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { throw AppError("请输入账号名称") }
-        guard !existing.contains(where: { $0.name == name }) else { throw AppError("已存在同名账号") }
+        guard !name.isEmpty else { throw AppError(L("请输入账号名称", "Please enter an account name")) }
+        guard !existing.contains(where: { $0.name == name }) else { throw AppError(L("已存在同名账号", "An account with this name already exists")) }
         guard let oauth = ClaudeLive.oauthAccount(), let uuid = oauth["accountUuid"]?.string else {
-            throw AppError("当前没有 Claude 登录会话，请先在 Claude Code 中登录")
+            throw AppError(L("当前没有 Claude 登录会话，请先在 Claude Code 中登录", "No Claude login session found. Please log in with Claude Code first"))
         }
-        guard !existing.contains(where: { $0.uuid == uuid }) else { throw AppError("该账号已经添加过了") }
-        guard let cred = await ClaudeLive.readCredential() else { throw AppError("未找到当前登录凭证") }
+        guard !existing.contains(where: { $0.uuid == uuid }) else { throw AppError(L("该账号已经添加过了", "This account has already been added")) }
+        guard let cred = await ClaudeLive.readCredential() else { throw AppError(L("未找到当前登录凭证", "Could not find the current login credentials")) }
         return try await add(name: name, cred: cred, oauth: oauth, existing: existing)
     }
 
     /// 用给定的凭证 + 账号信息新增账号（不依赖当前登录）
     static func add(name: String, cred: String, oauth: JSONValue, existing: [Account]) async throws -> Account {
-        guard let uuid = oauth["accountUuid"]?.string else { throw AppError("账号信息不完整") }
+        guard let uuid = oauth["accountUuid"]?.string else { throw AppError(L("账号信息不完整", "The account information is incomplete")) }
         let acc = Account(id: UUID().uuidString, name: name, email: oauth["emailAddress"]?.string ?? "",
                           uuid: uuid, plan: ClaudeLive.planName(oauth["organizationType"]?.string),
                           oauth: oauth, addedAt: Date())
-        guard await setSecret(acc, cred) else { throw AppError("写入钥匙串失败") }
+        guard await setSecret(acc, cred) else { throw AppError(L("写入钥匙串失败", "Failed to write to the Keychain")) }
         try save(existing + [acc])
         return acc
     }
 
     /// 为已有账号换上新登录的凭证（重新登录）
     static func replaceCredential(_ acc: Account, cred: String, oauth: JSONValue, in accounts: [Account]) async throws -> [Account] {
-        guard await setSecret(acc, cred) else { throw AppError("写入钥匙串失败") }
+        guard await setSecret(acc, cred) else { throw AppError(L("写入钥匙串失败", "Failed to write to the Keychain")) }
         var a = acc
         a.oauth = oauth
         a.plan = ClaudeLive.planName(oauth["organizationType"]?.string)
@@ -107,8 +107,8 @@ enum AccountStore {
 
     static func rename(_ id: String, to name: String, in accounts: [Account]) throws -> [Account] {
         let name = name.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { throw AppError("请输入账号名称") }
-        guard !accounts.contains(where: { $0.name == name && $0.id != id }) else { throw AppError("已存在同名账号") }
+        guard !name.isEmpty else { throw AppError(L("请输入账号名称", "Please enter an account name")) }
+        guard !accounts.contains(where: { $0.name == name && $0.id != id }) else { throw AppError(L("已存在同名账号", "An account with this name already exists")) }
         var all = accounts
         if let i = all.firstIndex(where: { $0.id == id }) { all[i].name = name }
         try save(all)
@@ -148,11 +148,11 @@ enum AccountStore {
         guard let cred = await secret(target),
               let obj = (try? JSONSerialization.jsonObject(with: Data(cred.utf8))) as? [String: Any],
               obj["claudeAiOauth"] != nil else {
-            throw AppError("该账号的已存凭证丢失，请重新登录添加")
+            throw AppError(L("该账号的已存凭证丢失，请重新登录添加", "The saved credentials for this account are missing. Please log in and add it again"))
         }
-        guard await ClaudeLive.writeCredential(cred) else { throw AppError("写入 Claude Code 凭证失败") }
+        guard await ClaudeLive.writeCredential(cred) else { throw AppError(L("写入 Claude Code 凭证失败", "Failed to write the Claude Code credentials")) }
         try ClaudeLive.setOAuthAccount(target.oauth)
-        guard ClaudeLive.identity()?.uuid == target.uuid else { throw AppError("切换后校验失败，~/.claude.json 可能被其他进程覆盖，请重试") }
+        guard ClaudeLive.identity()?.uuid == target.uuid else { throw AppError(L("切换后校验失败，~/.claude.json 可能被其他进程覆盖，请重试", "Verification after switching failed. ~/.claude.json may have been overwritten by another process. Please try again")) }
         return synced
     }
 }
