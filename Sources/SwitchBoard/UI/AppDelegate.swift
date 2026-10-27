@@ -106,7 +106,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let path = CommandLine.arguments[i + 1]
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                 let view = RootView(model: self.model).frame(width: Theme.panelWidth)
-                    .background(Color(red: 0.13, green: 0.12, blue: 0.13)).environment(\.colorScheme, .dark)
+                    .background(PanelBackground())
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .environment(\.colorScheme, .dark)
                 let r = ImageRenderer(content: view)
                 r.scale = 2
                 if let img = r.nsImage, let t = img.tiffRepresentation, let rep = NSBitmapImageRep(data: t),
