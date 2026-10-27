@@ -52,12 +52,12 @@ struct LiveIdentity: Equatable {
     let plan: String
 }
 
-struct Meter: Equatable {
+struct Meter: Equatable, Codable {
     var remaining: Double   // 0...100
     var resetsAt: Date?
 }
 
-struct UsageInfo: Equatable {
+struct UsageInfo: Equatable, Codable {
     var session: Meter?
     var weekly: Meter?
     var opus: Meter?

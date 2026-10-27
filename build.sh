@@ -8,6 +8,8 @@ APP=build/SwitchBoard.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp .build/release/SwitchBoard "$APP/Contents/MacOS/"
+mkdir -p "$APP/Contents/Resources"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 cp Info.plist "$APP/Contents/Info.plist"
 # CI 通过 VERSION 注入版本号（来自 git tag）
 [ -n "$VERSION" ] && /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"

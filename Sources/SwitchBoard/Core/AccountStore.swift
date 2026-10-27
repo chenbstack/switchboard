@@ -29,6 +29,25 @@ enum AccountStore {
         return ((try? dec.decode([Account].self, from: d)) ?? []).sorted { $0.addedAt < $1.addedAt }
     }
 
+    // MARK: 额度缓存（非敏感，仅用于启动时先展示上次数据）
+
+    static let usageFile = dir.appendingPathComponent("usage.json")
+
+    static func loadUsage() -> [String: UsageInfo] {
+        migrateLegacyDir()
+        guard let d = try? Data(contentsOf: usageFile) else { return [:] }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        return (try? dec.decode([String: UsageInfo].self, from: d)) ?? [:]
+    }
+
+    static func saveUsage(_ usage: [String: UsageInfo]) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        try? enc.encode(usage).write(to: usageFile, options: .atomic)
+    }
+
     static func save(_ accounts: [Account]) throws {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let enc = JSONEncoder()
@@ -149,8 +168,7 @@ actor Vault {
     private func load() async -> [String: String] {
         if let cache { return cache }
         var dict: [String: String] = [:]
-        if let raw = nativeRead() ?? nativeRead(service: AccountStore.legacyService),
-           let d = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: String] {
+        if let raw = nativeRead(), let d = Self.decode(raw) {
             dict = d
         } else {
             // 迁移：早期版本每个账号一条（account = 账号id），合并进 vault 后删除旧条目
@@ -160,6 +178,22 @@ actor Vault {
             }
             if !dict.isEmpty, await write(dict) {
                 for id in dict.keys { await Keychain.delete(service: service, account: id) }
+            }
+        }
+        // 改名迁移（ClaudeSwitch → SwitchBoard）：把旧 vault 里新 vault 没有的账号补进来，只做一次。
+        // 不能"新的读不到才读旧的"：新 vault 可能先被当前账号的同步写成只含一个账号的残缺版本。
+        let migratedKey = "vaultMigratedFromClaudeSwitch"
+        if !UserDefaults.standard.bool(forKey: migratedKey) {
+            if let raw = nativeRead(service: AccountStore.legacyService), let old = Self.decode(raw) {
+                let missing = old.filter { dict[$0.key] == nil }
+                var ok = true
+                if !missing.isEmpty {
+                    dict.merge(missing) { $1 }
+                    ok = await write(dict)
+                }
+                if ok { UserDefaults.standard.set(true, forKey: migratedKey) }
+            } else if !legacyExists() {
+                UserDefaults.standard.set(true, forKey: migratedKey)   // 没有旧数据，无需再查
             }
         }
         cache = dict
@@ -175,6 +209,16 @@ actor Vault {
     // 直接用系统钥匙串 API：不受 `security -i` 单行长度限制，密钥也不经过命令行参数
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+    }
+
+    private static func decode(_ raw: String) -> [String: String]? {
+        (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: String]
+    }
+
+    private func legacyExists() -> Bool {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                kSecAttrService as String: AccountStore.legacyService, kSecAttrAccount as String: account]
+        return SecItemCopyMatching(q as CFDictionary, nil) != errSecItemNotFound
     }
 
     private func nativeRead(service: String? = nil) -> String? {

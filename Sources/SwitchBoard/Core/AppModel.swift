@@ -30,6 +30,8 @@ final class AppModel: ObservableObject {
     @Published var updating = false
     @Published var switching: String?
     @Published var refreshing = false
+    /// 用户手动点击刷新触发的刷新（只有这种情况刷新按钮才转圈）
+    @Published var manualRefreshing = false
     @Published var lastUpdated: Date?
     @Published var launchAtLogin = false
     @Published var loginURL: String?
@@ -119,6 +121,10 @@ final class AppModel: ObservableObject {
         if CommandLine.arguments.contains("--demo") { startDemo(); return }
         launchAtLogin = SMAppService.mainApp.status == .enabled
         accounts = AccountStore.load()
+        // 先展示上次缓存的额度，再在后台刷新
+        let ids = Set(accounts.map(\.id))
+        usage = AccountStore.loadUsage().filter { ids.contains($0.key) }
+        lastUpdated = usage.values.map(\.fetchedAt).max()
         live = ClaudeLive.identity()
         liveCodex = CodexLive.identity()
         Theme.current = provider
@@ -137,6 +143,19 @@ final class AppModel: ObservableObject {
 
     func checkUpdate() {
         Task { if let u = await Updater.check() { update = u } }
+    }
+
+    /// 菜单里的「检查更新」：给出明确反馈
+    func checkUpdateManually() {
+        say("正在检查更新…")
+        Task {
+            if let u = await Updater.check() {
+                update = u
+                say("发现新版本 v\(u.version)，点击右上角「更新」即可升级")
+            } else {
+                say("已是最新版本 v\(Updater.currentVersion)")
+            }
+        }
     }
 
     func installUpdate() {
@@ -159,18 +178,25 @@ final class AppModel: ObservableObject {
         onChange?()
     }
 
+    /// 打开面板：只刷新本地身份；额度数据超过 2 分钟才在后台刷新，否则直接用缓存
     func refreshIfStale() {
         reloadLive()
-        if lastUpdated == nil || Date().timeIntervalSince(lastUpdated!) > 30 { refreshAll() }
+        if lastUpdated == nil || Date().timeIntervalSince(lastUpdated!) > 120 { refreshAll() }
     }
 
     func refreshAll() { Task { await refreshAllNow() } }
+
+    func refreshManually() {
+        manualRefreshing = true
+        refreshAll()
+    }
 
     func refreshAllNow() async {
         guard !refreshing else { return }
         refreshing = true
         defer {
             refreshing = false
+            manualRefreshing = false
             lastUpdated = Date()
             onChange?()
             scheduleRetryIfNeeded()
@@ -182,22 +208,18 @@ final class AppModel: ObservableObject {
         let targets = accounts
         let activeIDs = Set(targets.filter(isActive).map(\.id))
         for a in targets where usage[a.id] == nil { status[a.id] = .loading }
-        await withTaskGroup(of: (String, UsageOutcome).self) { group in
-            for a in targets {
-                let active = activeIDs.contains(a.id)
-                group.addTask {
-                    (a.id, a.provider == .codex ? await CodexService.load(a, isActive: active) : await UsageService.load(a, isActive: active))
-                }
+        // 逐个串行请求：避免多账号并发打接口（限流）和并发刷新同一份凭证
+        for a in targets {
+            let active = activeIDs.contains(a.id)
+            let out = a.provider == .codex ? await CodexService.load(a, isActive: active) : await UsageService.load(a, isActive: active)
+            switch out {
+            case .ok(let u): usage[a.id] = u; status[a.id] = nil
+            case .needsLogin: status[a.id] = .needsLogin
+            case .failed(let m): status[a.id] = .error(m)
             }
-            for await (id, out) in group {
-                switch out {
-                case .ok(let u): usage[id] = u; status[id] = nil
-                case .needsLogin: status[id] = .needsLogin
-                case .failed(let m): status[id] = .error(m)
-                }
-                onChange?()
-            }
+            onChange?()
         }
+        AccountStore.saveUsage(usage)
     }
 
     /// 有账号因网络问题失败时，20 秒后自动再试，最多连续 3 次

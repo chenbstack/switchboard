@@ -120,15 +120,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: 菜单栏：环形仪表 + 当前账号 5 小时剩余
+    // MARK: 菜单栏：切换箭头 + 双环仪表（当前账号 5 小时 / 每周剩余）
 
     func updateStatusItem() {
         guard let button = item.button else { return }
         let remaining = model.activeAccount.flatMap { model.usage[$0.id]?.session?.remaining }
-        button.image = Self.ring(fraction: (remaining ?? 100) / 100, dim: remaining == nil)
-        button.attributedTitle = NSAttributedString(
-            string: remaining.map { " \(Int($0.rounded()))%" } ?? "",
-            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)])
+        let weekly = model.activeAccount.flatMap { model.usage[$0.id]?.weekly?.remaining }
+        button.image = Self.ring(fraction: (remaining ?? 100) / 100, weekly: weekly.map { $0 / 100 }, dim: remaining == nil)
+        button.title = ""
     }
 
     static func roundedMask(radius: CGFloat) -> NSImage {
@@ -143,23 +142,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return img
     }
 
-    static func ring(fraction: Double, dim: Bool) -> NSImage {
-        let img = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
-            let c = NSPoint(x: rect.midX, y: rect.midY), r: CGFloat = 6.5
-            let track = NSBezierPath()
-            track.appendArc(withCenter: c, radius: r, startAngle: 0, endAngle: 360)
-            track.lineWidth = 2.2
-            NSColor.black.withAlphaComponent(0.28).setStroke()
-            track.stroke()
-            if !dim {
+    /// 菜单栏图标：app 的切换箭头 + 同心双环（外环 5 小时、内环每周剩余额度）
+    static func ring(fraction: Double, weekly: Double?, dim: Bool) -> NSImage {
+        let img = NSImage(size: NSSize(width: 36, height: 18), flipped: false) { rect in
+            if let sym = NSImage(systemSymbolName: "arrow.left.arrow.right", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 11, weight: .bold).applying(.init(paletteColors: [.black]))) {
+                let s = sym.size
+                sym.draw(in: NSRect(x: 0, y: rect.midY - s.height / 2, width: s.width, height: s.height))
+            }
+            let c = NSPoint(x: 27, y: rect.midY)
+            func ring(_ r: CGFloat, _ f: Double?) {
+                let track = NSBezierPath()
+                track.appendArc(withCenter: c, radius: r, startAngle: 0, endAngle: 360)
+                track.lineWidth = 2
+                NSColor.black.withAlphaComponent(0.28).setStroke()
+                track.stroke()
+                guard let f, !dim else { return }
                 let arc = NSBezierPath()
                 arc.appendArc(withCenter: c, radius: r, startAngle: 90,
-                              endAngle: 90 - 360 * CGFloat(max(0.02, min(1, fraction))), clockwise: true)
-                arc.lineWidth = 2.2
+                              endAngle: 90 - 360 * CGFloat(max(0.02, min(1, f))), clockwise: true)
+                arc.lineWidth = 2
                 arc.lineCapStyle = .round
                 NSColor.black.setStroke()
                 arc.stroke()
             }
+            ring(7.5, fraction)
+            ring(4, weekly)
             return true
         }
         img.isTemplate = true

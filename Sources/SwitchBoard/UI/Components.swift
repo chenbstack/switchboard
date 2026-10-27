@@ -60,21 +60,47 @@ struct IconButton: View {
     var spinning = false
     let action: () -> Void
     @State private var hover = false
-    @State private var angle = 0.0
+    @State private var startedAt: Date?
+    @State private var endedAt: Date?
+    private let speed = 360.0 / 0.9   // 度/秒
+
+    /// 转动中匀速旋转；停止后继续转完当前这一圈再静止，不会反向回转
+    private func degrees(at now: Date) -> Double {
+        guard let startedAt else { return 0 }
+        let deg = now.timeIntervalSince(startedAt) * speed
+        guard let endedAt else { return deg }
+        let target = (endedAt.timeIntervalSince(startedAt) * speed / 360).rounded(.up) * 360
+        return min(deg, target)
+    }
+
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(hover ? Theme.text1 : Theme.text2)
-                .rotationEffect(.degrees(angle))
-                .frame(width: 28, height: 28)
-                .background(.white.opacity(hover ? 0.13 : 0.06), in: Circle())
+            TimelineView(.animation(paused: startedAt == nil)) { ctx in
+                Image(systemName: symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(hover ? Theme.text1 : Theme.text2)
+                    .frame(width: 16, height: 16)
+                    .rotationEffect(.degrees(degrees(at: ctx.date)))
+            }
+            .frame(width: 28, height: 28)
+            .background(.white.opacity(hover ? 0.13 : 0.06), in: Circle())
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        .onAppear { if spinning { startedAt = Date() } }
         .onChange(of: spinning) { _, on in
-            if on { withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { angle = 360 } }
-            else { withAnimation(.easeOut(duration: 0.2)) { angle = 0 } }
+            if on {
+                startedAt = Date(); endedAt = nil
+            } else if let s = startedAt {
+                let now = Date()
+                endedAt = now
+                let total = now.timeIntervalSince(s) * speed
+                let remain = ((total / 360).rounded(.up) * 360 - total) / speed
+                Task {
+                    try? await Task.sleep(nanoseconds: UInt64((remain + 0.05) * 1_000_000_000))
+                    if endedAt == now { startedAt = nil; endedAt = nil }
+                }
+            }
         }
     }
 }

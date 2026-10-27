@@ -103,13 +103,18 @@ struct HeaderBar: View {
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
             Spacer()
             if let u = model.update { UpdateButton(version: u.version, busy: model.updating) { model.installUpdate() } }
-            IconButton(symbol: "arrow.clockwise", spinning: model.refreshing) { model.refreshAll() }
+            IconButton(symbol: "arrow.clockwise", spinning: model.manualRefreshing) { model.refreshManually() }
             Menu {
                 Toggle("开机启动", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
                 if ClaudeDesktop.installed, model.provider == .claude {
                     Toggle("切换账号时同步 Claude 桌面端", isOn: $model.syncDesktop)
                 }
                 Divider()
+                if let u = model.update {
+                    Button("更新到 v\(u.version)") { model.installUpdate() }.disabled(model.updating)
+                } else {
+                    Button("检查更新（当前 v\(Updater.currentVersion)）") { model.checkUpdateManually() }
+                }
                 Button("退出 SwitchBoard") { NSApp.terminate(nil) }
             } label: {
                 Image(systemName: "ellipsis")
@@ -269,7 +274,7 @@ struct AccountMenu: View {
     let acc: Account
     var body: some View {
         Button("重命名…") { model.beginRename(acc) }
-        Button("刷新额度") { model.refreshAll() }
+        Button("刷新额度") { model.refreshManually() }
         if acc.provider == .claude, ClaudeDesktop.installed {
             Divider()
             switch model.desktopMark(acc) {
