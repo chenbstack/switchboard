@@ -1,0 +1,213 @@
+import Foundation
+import CryptoKit
+import Security
+
+/// 账号库：元数据在 Application Support，所有账号凭证合并存放在钥匙串的同一条目里（见 Vault）
+enum AccountStore {
+    static let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("SwitchBoard")
+    static let file = dir.appendingPathComponent("accounts.json")
+    static let secretService = "SwitchBoard"
+    // 改名前（ClaudeSwitch）的数据位置，首次启动时迁移
+    static let legacyService = "ClaudeSwitch"
+    static let legacyDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("ClaudeSwitch")
+
+    static func migrateLegacyDir() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: legacyDir.path), !fm.fileExists(atPath: dir.path) else { return }
+        try? fm.moveItem(at: legacyDir, to: dir)
+    }
+
+    // MARK: 持久化
+
+    static func load() -> [Account] {
+        migrateLegacyDir()
+        guard let d = try? Data(contentsOf: file) else { return [] }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        return ((try? dec.decode([Account].self, from: d)) ?? []).sorted { $0.addedAt < $1.addedAt }
+    }
+
+    static func save(_ accounts: [Account]) throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try enc.encode(accounts).write(to: file, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    }
+
+    static func secret(_ a: Account) async -> String? { await Vault.shared.get(a.id) }
+    static func setSecret(_ a: Account, _ v: String) async -> Bool { await Vault.shared.set(a.id, v) }
+
+    static func suggestName(email: String, existing: [Account]) -> String {
+        var base = String(email.split(separator: "@").first ?? "account")
+        base = base.filter { $0.isLetter || $0.isNumber || "-_.".contains($0) }
+        if base.isEmpty { base = "account" }
+        var name = base, i = 2
+        while existing.contains(where: { $0.name == name }) { name = "\(base)-\(i)"; i += 1 }
+        return name
+    }
+
+    // MARK: 把「当前登录会话」保存为账号
+
+    static func addCurrent(name: String, existing: [Account]) async throws -> Account {
+        let name = name.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { throw AppError("请输入账号名称") }
+        guard !existing.contains(where: { $0.name == name }) else { throw AppError("已存在同名账号") }
+        guard let oauth = ClaudeLive.oauthAccount(), let uuid = oauth["accountUuid"]?.string else {
+            throw AppError("当前没有 Claude 登录会话，请先在 Claude Code 中登录")
+        }
+        guard !existing.contains(where: { $0.uuid == uuid }) else { throw AppError("该账号已经添加过了") }
+        guard let cred = await ClaudeLive.readCredential() else { throw AppError("未找到当前登录凭证") }
+        return try await add(name: name, cred: cred, oauth: oauth, existing: existing)
+    }
+
+    /// 用给定的凭证 + 账号信息新增账号（不依赖当前登录）
+    static func add(name: String, cred: String, oauth: JSONValue, existing: [Account]) async throws -> Account {
+        guard let uuid = oauth["accountUuid"]?.string else { throw AppError("账号信息不完整") }
+        let acc = Account(id: UUID().uuidString, name: name, email: oauth["emailAddress"]?.string ?? "",
+                          uuid: uuid, plan: ClaudeLive.planName(oauth["organizationType"]?.string),
+                          oauth: oauth, addedAt: Date())
+        guard await setSecret(acc, cred) else { throw AppError("写入钥匙串失败") }
+        try save(existing + [acc])
+        return acc
+    }
+
+    /// 为已有账号换上新登录的凭证（重新登录）
+    static func replaceCredential(_ acc: Account, cred: String, oauth: JSONValue, in accounts: [Account]) async throws -> [Account] {
+        guard await setSecret(acc, cred) else { throw AppError("写入钥匙串失败") }
+        var a = acc
+        a.oauth = oauth
+        a.plan = ClaudeLive.planName(oauth["organizationType"]?.string)
+        let updated = accounts.map { $0.id == a.id ? a : $0 }
+        try save(updated)
+        return updated
+    }
+
+    static func rename(_ id: String, to name: String, in accounts: [Account]) throws -> [Account] {
+        let name = name.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { throw AppError("请输入账号名称") }
+        guard !accounts.contains(where: { $0.name == name && $0.id != id }) else { throw AppError("已存在同名账号") }
+        var all = accounts
+        if let i = all.firstIndex(where: { $0.id == id }) { all[i].name = name }
+        try save(all)
+        return all
+    }
+
+    static func remove(_ a: Account, from accounts: [Account]) async throws -> [Account] {
+        await Vault.shared.remove(a.id)
+        let rest = accounts.filter { $0.id != a.id }
+        try save(rest)
+        return rest
+    }
+
+    // MARK: 保持快照新鲜
+    // Claude Code 会轮换 refresh token；若快照里还是旧的，之后切回该账号就会「登录已失效」。
+    // 所以每次刷新/切换前，把当前登录态回写到对应账号。
+
+    static func syncLive(into accounts: [Account]) async -> [Account] {
+        guard let live = ClaudeLive.identity(), var acc = accounts.first(where: { $0.uuid == live.uuid }),
+              let cred = await ClaudeLive.readCredential(),
+              (try? JSONSerialization.jsonObject(with: Data(cred.utf8))) != nil else { return accounts }
+        if let old = await secret(acc), old == cred, acc.oauth == ClaudeLive.oauthAccount() { return accounts }
+        _ = await setSecret(acc, cred)
+        guard let oauth = ClaudeLive.oauthAccount() else { return accounts }
+        acc.oauth = oauth
+        acc.email = oauth["emailAddress"]?.string ?? acc.email
+        acc.plan = ClaudeLive.planName(oauth["organizationType"]?.string)
+        let updated = accounts.map { $0.id == acc.id ? acc : $0 }
+        try? save(updated)
+        return updated
+    }
+
+    // MARK: 全局切换
+
+    static func switchTo(_ target: Account, accounts: [Account]) async throws -> [Account] {
+        let synced = await syncLive(into: accounts)
+        guard let cred = await secret(target),
+              let obj = (try? JSONSerialization.jsonObject(with: Data(cred.utf8))) as? [String: Any],
+              obj["claudeAiOauth"] != nil else {
+            throw AppError("该账号的已存凭证丢失，请重新登录添加")
+        }
+        guard await ClaudeLive.writeCredential(cred) else { throw AppError("写入 Claude Code 凭证失败") }
+        try ClaudeLive.setOAuthAccount(target.oauth)
+        guard ClaudeLive.identity()?.uuid == target.uuid else { throw AppError("切换后校验失败，~/.claude.json 可能被其他进程覆盖，请重试") }
+        return synced
+    }
+}
+
+/// 所有账号的凭证合并为钥匙串里的一条（service = SwitchBoard，account = vault，值为 {账号id: 凭证JSON}）。
+/// 只有一个条目，系统授权只需要确认一次；读到的内容缓存在内存里，避免反复访问钥匙串。
+actor Vault {
+    static let shared = Vault()
+    private let service = AccountStore.secretService
+    private let account = "vault"
+    private var cache: [String: String]?
+
+    private func load() async -> [String: String] {
+        if let cache { return cache }
+        var dict: [String: String] = [:]
+        if let raw = nativeRead() ?? nativeRead(service: AccountStore.legacyService),
+           let d = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: String] {
+            dict = d
+        } else {
+            // 迁移：早期版本每个账号一条（account = 账号id），合并进 vault 后删除旧条目
+            let ids = AccountStore.load().map(\.id)
+            for id in ids {
+                if let v = await Keychain.read(service: service, account: id) { dict[id] = v }
+            }
+            if !dict.isEmpty, await write(dict) {
+                for id in dict.keys { await Keychain.delete(service: service, account: id) }
+            }
+        }
+        cache = dict
+        return dict
+    }
+
+    private func write(_ dict: [String: String]) async -> Bool {
+        guard let d = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+              let s = String(data: d, encoding: .utf8) else { return false }
+        return nativeWrite(s)
+    }
+
+    // 直接用系统钥匙串 API：不受 `security -i` 单行长度限制，密钥也不经过命令行参数
+    private var query: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+    }
+
+    private func nativeRead(service: String? = nil) -> String? {
+        var out: CFTypeRef?
+        var q = query
+        if let service { q[kSecAttrService as String] = service }
+        let st = SecItemCopyMatching(q.merging([kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]) { $1 } as CFDictionary, &out)
+        guard st == errSecSuccess, let d = out as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
+
+    private func nativeWrite(_ value: String) -> Bool {
+        let data = Data(value.utf8)
+        let st = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if st == errSecSuccess { return true }
+        guard st == errSecItemNotFound else { return false }
+        return SecItemAdd(query.merging([kSecValueData as String: data]) { $1 } as CFDictionary, nil) == errSecSuccess
+    }
+
+    func get(_ id: String) async -> String? { await load()[id] }
+
+    func set(_ id: String, _ value: String) async -> Bool {
+        var dict = await load()
+        if dict[id] == value { return true }
+        dict[id] = value
+        guard await write(dict) else { return false }
+        cache = dict
+        return true
+    }
+
+    func remove(_ id: String) async {
+        var dict = await load()
+        guard dict.removeValue(forKey: id) != nil else { return }
+        if await write(dict) { cache = dict }
+    }
+}
