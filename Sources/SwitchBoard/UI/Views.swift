@@ -107,7 +107,15 @@ struct HeaderBar: View {
             Menu {
                 Toggle(L("开机启动", "Launch at login"), isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
                 if ClaudeDesktop.installed, model.provider == .claude {
-                    Toggle(L("切换账号时同步 Claude 桌面端", "Sync Claude Desktop when switching"), isOn: $model.syncDesktop)
+                    Toggle(L("同步 Claude 桌面端", "Sync Claude Desktop"), isOn: $model.syncDesktop)
+                }
+                Picker(L("刷新频率", "Refresh interval"), selection: $model.refreshInterval) {
+                    Text(L("1 分钟", "1 min")).tag(60)
+                    Text(L("2 分钟", "2 min")).tag(120)
+                    Text(L("5 分钟", "5 min")).tag(300)
+                    Text(L("10 分钟", "10 min")).tag(600)
+                    Text(L("30 分钟", "30 min")).tag(1800)
+                    Text(L("仅手动", "Manual only")).tag(0)
                 }
                 Picker("Language / 语言", selection: $model.language) {
                     Text("Auto / 跟随系统").tag("auto")
@@ -431,7 +439,7 @@ struct FooterBar: View {
     @ObservedObject var model: AppModel
     var body: some View {
         HStack {
-            TimelineView(.periodic(from: .now, by: 20)) { ctx in
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 Text(model.lastUpdated.map { L("更新于 ", "Updated ") + Self.ago($0, ctx.date) } ?? L("正在获取额度…", "Fetching quota…"))
                     .font(.system(size: 10.5)).foregroundStyle(Theme.text3)
             }
@@ -442,7 +450,7 @@ struct FooterBar: View {
 
     static func ago(_ d: Date, _ now: Date) -> String {
         let s = Int(now.timeIntervalSince(d))
-        if s < 15 { return L("刚刚", "just now") }
+        if s < 1 { return L("刚刚", "just now") }
         if s < 60 { return L("\(s) 秒前", "\(s)s ago") }
         return L("\(s / 60) 分钟前", "\(s / 60)m ago")
     }

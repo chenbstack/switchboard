@@ -31,6 +31,10 @@ final class AppModel: ObservableObject {
     @Published var language: String = UserDefaults.standard.string(forKey: "language") ?? "auto" {
         didSet { UserDefaults.standard.set(language, forKey: "language"); Lang.override = language; onChange?() }
     }
+    /// 自动刷新间隔（秒），0 = 仅手动刷新
+    @Published var refreshInterval: Int = UserDefaults.standard.object(forKey: "refreshInterval") as? Int ?? 300 {
+        didSet { UserDefaults.standard.set(refreshInterval, forKey: "refreshInterval"); scheduleTimer() }
+    }
     @Published var updating = false
     @Published var switching: String?
     @Published var refreshing = false
@@ -136,12 +140,19 @@ final class AppModel: ObservableObject {
         Task {
             await refreshAllNow()
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshAll() }
-        }
+        scheduleTimer()
         checkUpdate()
         Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.checkUpdate() }
+        }
+    }
+
+    private func scheduleTimer() {
+        timer?.invalidate()
+        timer = nil
+        guard refreshInterval > 0 else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(refreshInterval), repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshAll() }
         }
     }
 
@@ -185,7 +196,8 @@ final class AppModel: ObservableObject {
     /// 打开面板：只刷新本地身份；额度数据超过 2 分钟才在后台刷新，否则直接用缓存
     func refreshIfStale() {
         reloadLive()
-        if lastUpdated == nil || Date().timeIntervalSince(lastUpdated!) > 120 { refreshAll() }
+        let staleAfter = refreshInterval > 0 ? min(120, TimeInterval(refreshInterval)) : 120
+        if lastUpdated == nil || Date().timeIntervalSince(lastUpdated!) > staleAfter { refreshAll() }
     }
 
     func refreshAll() { Task { await refreshAllNow() } }
