@@ -10,7 +10,7 @@ symlinks = {"Applications": "/Applications"}
 background = defines["bg"]
 icon = defines["icon"]
 
-window_rect = ((200, 120), (660, 400))
+window_rect = ((200, 120), (660, 432))  # 高度含约 32pt 标题栏，内容区 660x400 与背景图一致
 icon_size = 112
 text_size = 13
 icon_locations = {application: (180, 190), "Applications": (480, 190)}

@@ -1,4 +1,4 @@
-// 生成 dmg 窗口背景（660x400 pt，含 @2x）：swift scripts/make-dmg-bg.swift <输出目录>
+// 生成 dmg 窗口背景（660x400）：swift scripts/make-dmg-bg.swift <输出目录>
 import AppKit
 
 let W = 660, H = 400
@@ -54,4 +54,4 @@ func render(scale: Int) -> Data {
 let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "build"
 try? FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
 try! render(scale: 1).write(to: URL(fileURLWithPath: "\(out)/dmg-bg.png"))
-try! render(scale: 2).write(to: URL(fileURLWithPath: "\(out)/dmg-bg@2x.png"))
+// 不要输出 dmg-bg@2x.png：dmgbuild 看到同名 @2x 会自动合成多分辨率 TIFF，部分系统的访达会把它放大 2 倍显示
