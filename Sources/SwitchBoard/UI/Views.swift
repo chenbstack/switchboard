@@ -175,15 +175,17 @@ struct AccountCard: View {
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(isActive ? Theme.accent.opacity(0.15) : .white.opacity(hover ? 0.07 : 0.045)))
+            .fill(isActive ? Theme.accent.opacity(0.15) : .white.opacity(hover ? 0.085 : 0.045)))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .strokeBorder(isActive ? Theme.accent : .white.opacity(hover ? 0.14 : 0.08),
+            .strokeBorder(isActive ? Theme.accent : .white.opacity(hover ? 0.2 : 0.08),
                           lineWidth: isActive ? 1.5 : 0.8))
-        .shadow(color: isActive ? Theme.accent.opacity(0.35) : .clear, radius: 16)
+        .shadow(color: isActive ? Theme.accent.opacity(0.35) : .black.opacity(hover ? 0.28 : 0), radius: isActive ? 16 : 10, y: isActive ? 0 : 4)
+        .scaleEffect(hover ? 1.012 : 1)
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture { if !isActive, status != .needsLogin, !confirmDelete { model.switchTo(acc) } }
         .onHover { hover = $0; if !$0 { confirmDelete = false } }
         .animation(.easeOut(duration: 0.15), value: hover)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hover)
         .animation(.spring(response: 0.4, dampingFraction: 0.84), value: isActive)
         .contextMenu { AccountMenu(model: model, acc: acc) }
     }
