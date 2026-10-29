@@ -134,13 +134,16 @@ enum AccountStore {
     }
 
     /// id = nil 新增；否则编辑（key 留空表示不改密钥）
-    static func saveAPI(id: String?, name: String, config: APIConfig, key: String, existing: [Account]) async throws -> [Account] {
+    static func saveAPI(id: String?, provider: Provider = .claude, name: String, config: APIConfig, key: String, existing: [Account]) async throws -> [Account] {
         let name = name.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { throw AppError(L("请输入账号名称", "Please enter an account name")) }
         guard !existing.contains(where: { $0.name == name && $0.id != id }) else { throw AppError(L("已存在同名账号", "An account with this name already exists")) }
         var cfg = config
         cfg.baseURL = try normalizeURL(config.baseURL)
         for k in [\.model, \.opus, \.sonnet, \.haiku, \.subagent] as [WritableKeyPath<APIConfig, String>] { cfg[keyPath: k] = cfg[keyPath: k].trimmingCharacters(in: .whitespaces) }
+        cfg.catalogModels = cfg.catalogModels.map { ModelMap(name: $0.name.trimmingCharacters(in: .whitespacesAndNewlines), target: $0.target.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .filter { !$0.target.isEmpty }.map { ModelMap(name: $0.name.isEmpty ? $0.target : $0.name, target: $0.target) }
+        if provider == .codex, cfg.catalog, cfg.catalogModels.isEmpty { throw AppError(L("开启模型映射需要至少选择一个模型", "Model mapping needs at least one model")) }
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
         var all = existing
         if let id, let i = all.firstIndex(where: { $0.id == id }) {
@@ -151,7 +154,7 @@ enum AccountStore {
             let newID = UUID().uuidString
             guard await Vault.shared.set(newID, key) else { throw AppError(L("写入钥匙串失败", "Failed to write to the Keychain")) }
             all.append(Account(id: newID, name: name, email: cfg.host, uuid: "api-" + newID, plan: "API",
-                               oauth: .null, addedAt: Date(), provider: .claude, api: cfg))
+                               oauth: .null, addedAt: Date(), provider: provider, api: cfg))
         }
         try save(all)
         return all
@@ -164,6 +167,18 @@ enum AccountStore {
         }
         try ClaudeLive.applyAPI(target, key: key)
         guard ClaudeLive.activeAPIID() == target.id else { throw AppError(L("写入 ~/.claude/settings.json 失败，请重试", "Failed to write ~/.claude/settings.json. Please try again")) }
+        return synced
+    }
+
+    static func switchToCodexAPI(_ target: Account, accounts: [Account]) async throws -> [Account] {
+        let synced = await syncLiveCodex(into: accounts)   // 离开前把订阅登录态回写
+        guard let key = await Vault.shared.get(target.id), !key.isEmpty else {
+            throw AppError(L("该账号的 API 密钥丢失，请编辑后重新输入", "The API key for this account is missing. Edit it and enter the key again"))
+        }
+        do { try CodexConfig.applyAPI(target, key: key) } catch let e as AppError { throw e } catch {
+            throw AppError(L("写入 ~/.codex/config.toml 失败：\(error.localizedDescription)", "Failed to write ~/.codex/config.toml: \(error.localizedDescription)"))
+        }
+        guard CodexConfig.activeAPIID() == target.id else { throw AppError(L("写入 ~/.codex/config.toml 失败，请重试", "Failed to write ~/.codex/config.toml. Please try again")) }
         return synced
     }
 

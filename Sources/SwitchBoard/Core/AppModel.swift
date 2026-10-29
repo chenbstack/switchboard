@@ -33,12 +33,15 @@ final class AppModel: ObservableObject {
     @Published var draftHaiku = ""
     @Published var draftModel = ""
     @Published var draftSubagent = ""
+    @Published var draftCatalog = false
+    @Published var draftCatalogModels: [ModelMap] = []
     /// 表单里「获取模型列表」的结果
     @Published var apiModels: [String] = []
     @Published var modelsLoading = false
     @Published var modelsError: String?
     /// 当前生效的自定义 API 账号 id（settings.json 里的标记）
     @Published var apiActive: String?
+    @Published var codexAPIActive: String?
     /// 连通性探测通过的 API 账号
     @Published var apiOK: Set<String> = []
     @Published var formError: String?
@@ -95,8 +98,9 @@ final class AppModel: ObservableObject {
     func liveFor(_ p: Provider) -> LiveIdentity? { p == .claude ? live : liveCodex }
     var currentLive: LiveIdentity? { liveFor(provider) }
     func isActive(_ a: Account) -> Bool {
-        if a.api != nil { return apiActive == a.id }
+        if a.api != nil { return (a.provider == .codex ? codexAPIActive : apiActive) == a.id }
         if a.provider == .claude, apiActive != nil { return false }   // API 的 env 优先于 OAuth 登录
+        if a.provider == .codex, codexAPIActive != nil { return false }   // 中转站的 model_provider 优先于订阅登录
         return liveFor(a.provider)?.uuid == a.uuid
     }
 
@@ -140,7 +144,10 @@ final class AppModel: ObservableObject {
         if CommandLine.arguments.contains("--codex") { provider = .codex }
         accounts.append(Account(id: "relay-a", name: "relay-a", email: "api.relay-demo.com", uuid: "api-relay-a", plan: "API", oauth: .null,
                                 addedAt: now.addingTimeInterval(9), api: APIConfig(baseURL: "https://api.relay-demo.com", opus: "claude-opus-relay", sonnet: "claude-sonnet-relay")))
-        apiOK = ["relay-a"]
+        accounts.append(Account(id: "relay-cx", name: "relay-cx", email: "api.relay-demo.com", uuid: "api-relay-cx", plan: "API", oauth: .null,
+                                addedAt: now.addingTimeInterval(10), provider: .codex,
+                                api: APIConfig(baseURL: "https://api.relay-demo.com/v1", model: "gpt-5.5", catalog: true, catalogModels: [ModelMap(name: "GPT-5.5", target: "gpt-5.5"), ModelMap(name: "mini", target: "gpt-5.5-mini")])))
+        apiOK = ["relay-a", "relay-cx"]
         lastUpdated = now
         onChange?()
     }
@@ -217,6 +224,7 @@ final class AppModel: ObservableObject {
         live = ClaudeLive.identity()
         liveCodex = CodexLive.identity()
         apiActive = ClaudeLive.activeAPIID()
+        codexAPIActive = CodexConfig.activeAPIID()
         onChange?()
     }
 
@@ -300,7 +308,8 @@ final class AppModel: ObservableObject {
         Task {
             do {
                 if acc.api != nil {
-                    accounts = try await AccountStore.switchToAPI(acc, accounts: accounts)
+                    accounts = acc.provider == .codex ? try await AccountStore.switchToCodexAPI(acc, accounts: accounts)
+                                                      : try await AccountStore.switchToAPI(acc, accounts: accounts)
                 } else {
                     accounts = acc.provider == .codex ? try await AccountStore.switchToCodex(acc, accounts: accounts)
                                                       : try await AccountStore.switchTo(acc, accounts: accounts)
@@ -308,7 +317,7 @@ final class AppModel: ObservableObject {
                 reloadLive()
                 let wasAPI = acc.api != nil
                 var note = acc.provider == .codex ? L("新会话立即生效，已打开的 Codex 需重启", "Effective for new sessions; restart any open Codex") : L("新会话立即生效，IDE 需重启", "Effective for new sessions; restart your IDE")
-                if wasAPI { note = L("新会话立即生效，IDE 需重启（Claude 桌面端不受影响）", "Effective for new sessions; restart your IDE (Claude Desktop is unaffected)") }
+                if wasAPI, acc.provider == .claude { note = L("新会话立即生效，IDE 需重启（Claude 桌面端不受影响）", "Effective for new sessions; restart your IDE (Claude Desktop is unaffected)") }
                 else if acc.provider == .claude, syncDesktop, ClaudeDesktop.installed, desktopSaved.contains(acc.id) || desktopOwner == acc.id {
                     if desktopOwner != acc.id { note = await switchDesktop(acc, quiet: true) ? L("桌面端已同步，", "Desktop synced. ") + note : note }
                 }
@@ -331,7 +340,7 @@ final class AppModel: ObservableObject {
     }
 
     func beginAddAPI() {
-        draftName = ""; draftBaseURL = ""; draftKey = ""; draftModel = ""; draftSubagent = ""; draftOpus = ""; draftSonnet = ""; draftHaiku = ""
+        draftName = ""; draftBaseURL = ""; draftKey = ""; draftModel = ""; draftSubagent = ""; draftOpus = ""; draftSonnet = ""; draftHaiku = ""; draftCatalog = false; draftCatalogModels = []
         apiModels = []; modelsError = nil
         formError = nil
         route = .addAPI
@@ -341,6 +350,7 @@ final class AppModel: ObservableObject {
         guard let api = a.api else { return }
         draftName = a.name; draftBaseURL = api.baseURL; draftKey = ""
         draftModel = api.model; draftSubagent = api.subagent; draftOpus = api.opus; draftSonnet = api.sonnet; draftHaiku = api.haiku
+        draftCatalog = api.catalog; draftCatalogModels = api.catalogModels
         apiModels = []; modelsError = nil
         formError = nil
         route = .editAPI(a.id)
@@ -387,12 +397,13 @@ final class AppModel: ObservableObject {
                 case .addAPI, .editAPI:
                     var id: String?
                     if case .editAPI(let i) = route { id = i }
-                    let cfg = APIConfig(baseURL: draftBaseURL, model: draftModel, opus: draftOpus, sonnet: draftSonnet, haiku: draftHaiku, subagent: draftSubagent)
-                    accounts = try await AccountStore.saveAPI(id: id, name: draftName, config: cfg, key: draftKey, existing: accounts)
-                    // 正在使用的 API 账号被编辑：立刻把新配置写进 settings.json
-                    if let id, apiActive == id, let acc = accounts.first(where: { $0.id == id }),
-                       let key = await Vault.shared.get(id) {
-                        try ClaudeLive.applyAPI(acc, key: key)
+                    let cfg = APIConfig(baseURL: draftBaseURL, model: draftModel, opus: draftOpus, sonnet: draftSonnet, haiku: draftHaiku, subagent: draftSubagent,
+                                        catalog: provider == .codex && draftCatalog, catalogModels: provider == .codex ? draftCatalogModels : [])
+                    accounts = try await AccountStore.saveAPI(id: id, provider: provider, name: draftName, config: cfg, key: draftKey, existing: accounts)
+                    // 正在使用的 API 账号被编辑：立刻把新配置写进 settings.json / config.toml
+                    if let id, let acc = accounts.first(where: { $0.id == id }), let key = await Vault.shared.get(id) {
+                        if provider == .codex, codexAPIActive == id { try CodexConfig.applyAPI(acc, key: key) }
+                        else if provider == .claude, apiActive == id { try ClaudeLive.applyAPI(acc, key: key) }
                     }
                     say(id == nil ? L("已添加 API 账号 \(draftName)", "Added API account \(draftName)") : L("已保存", "Saved"))
                     status = status.filter { $0.key != id }
@@ -523,7 +534,8 @@ final class AppModel: ObservableObject {
         guard !blockedByDemo() else { return }
         Task {
             do {
-                if acc.api != nil, apiActive == acc.id { try ClaudeLive.clearAPI(); reloadLive() }
+                if acc.api != nil, acc.provider == .claude, apiActive == acc.id { try ClaudeLive.clearAPI(); reloadLive() }
+                if acc.api != nil, acc.provider == .codex, codexAPIActive == acc.id { try CodexConfig.clearAPI(); reloadLive() }
                 accounts = try await AccountStore.remove(acc, from: accounts)
                 apiOK.remove(acc.id)
                 if acc.provider == .claude { ClaudeDesktop.forget(acc.id); reloadDesktop() }

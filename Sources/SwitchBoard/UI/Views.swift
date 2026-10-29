@@ -262,7 +262,13 @@ extension AccountCard {
                     Label(L("检测中…", "Checking…"), systemImage: "network").font(.system(size: 11)).foregroundStyle(Theme.text2)
                 }
             }
-            if api.hasMapping {
+            if acc.provider == .codex {
+                let parts = [(L("默认", "Default"), api.model), (L("模型映射", "Model mapping"), api.catalog ? api.catalogModels.map { $0.name == $0.target ? $0.target : "\($0.name) → \($0.target)" }.joined(separator: ", ") : "")].filter { !$0.1.isEmpty }
+                if !parts.isEmpty {
+                    Text(parts.map { "\($0.0) → \($0.1)" }.joined(separator: "  ·  "))
+                        .font(.system(size: 10.5)).foregroundStyle(Theme.text3).lineLimit(2)
+                }
+            } else if api.hasMapping {
                 let parts = [(L("默认", "Default"), api.model), ("Opus", api.opus), ("Sonnet", api.sonnet), ("Haiku", api.haiku), (L("子代理", "Subagent"), api.subagent)].filter { !$0.1.isEmpty }
                 Text(parts.map { "\($0.0) → \($0.1)" }.joined(separator: "  ·  "))
                     .font(.system(size: 10.5)).foregroundStyle(Theme.text3).lineLimit(2)
@@ -361,15 +367,11 @@ struct UnsavedCard: View {
 struct AddBar: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        if model.provider == .claude {
-            // 两个按钮并排，文案缩短
-            HStack(spacing: 8) {
-                button("plus", L("登录另一个账号", "Add account")) { model.beginLogin() }
-                button("server.rack", L("自定义 API", "Custom API")) { model.beginAddAPI() }
-                    .help(L("添加自定义 API / 中转站", "Add custom API / relay"))
-            }
-        } else {
-            button("plus", L("登录另一个账号", "Log in to another account")) { model.beginLogin() }
+        // 两个按钮并排，文案缩短
+        HStack(spacing: 8) {
+            button("plus", L("登录另一个账号", "Add account")) { model.beginLogin() }
+            button("server.rack", L("自定义 API", "Custom API")) { model.beginAddAPI() }
+                .help(L("添加自定义 API / 中转站", "Add custom API / relay"))
         }
     }
 
@@ -423,28 +425,35 @@ struct ModelRow: View {
     let options: [String]
     @Binding var value: String
     var body: some View {
-        FormRow(title: title) {
-            if options.isEmpty {
-                TextField(L("可留空", "Optional"), text: $value).textFieldStyle(.plain).font(.system(size: 12.5))
-            } else {
-                Menu {
-                    Button(L("不设置", "Not set")) { value = "" }
-                    Divider()
-                    // 当前值不在列表里（例如换了站点）也保留可见
-                    ForEach(options.contains(value) || value.isEmpty ? options : [value] + options, id: \.self) { m in
-                        Button { value = m } label: { if m == value { Label(m, systemImage: "checkmark") } else { Text(m) } }
-                    }
-                } label: {
-                    HStack {
-                        Text(value.isEmpty ? L("不设置", "Not set") : value).lineLimit(1).truncationMode(.middle)
-                            .foregroundStyle(value.isEmpty ? Theme.text3 : Theme.text1)
-                        Spacer(minLength: 4)
-                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.text2)
-                    }
-                    .font(.system(size: 12.5)).contentShape(Rectangle())
+        FormRow(title: title) { ModelPicker(options: options, value: $value) }
+    }
+}
+
+/// 拿到模型列表后用下拉选择，否则手动输入
+struct ModelPicker: View {
+    let options: [String]
+    @Binding var value: String
+    var body: some View {
+        if options.isEmpty {
+            TextField(L("可留空", "Optional"), text: $value).textFieldStyle(.plain).font(.system(size: 12.5))
+        } else {
+            Menu {
+                Button(L("不设置", "Not set")) { value = "" }
+                Divider()
+                // 当前值不在列表里（例如换了站点）也保留可见
+                ForEach(options.contains(value) || value.isEmpty ? options : [value] + options, id: \.self) { m in
+                    Button { value = m } label: { if m == value { Label(m, systemImage: "checkmark") } else { Text(m) } }
                 }
-                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+            } label: {
+                HStack {
+                    Text(value.isEmpty ? L("不设置", "Not set") : value).lineLimit(1).truncationMode(.middle)
+                        .foregroundStyle(value.isEmpty ? Theme.text3 : Theme.text1)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.text2)
+                }
+                .font(.system(size: 12.5)).contentShape(Rectangle())
             }
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
         }
     }
 }
@@ -454,7 +463,7 @@ struct APIForm: View {
     var editing: Bool { if case .editAPI = model.route { return true }; return false }
 
     var body: some View {
-        Card {
+        Group {   // 不套 Card：直接贴着窗口内边距
             VStack(alignment: .leading, spacing: 12) {
                 Text(editing ? L("编辑 API 账号", "Edit API account") : L("添加自定义 API / 中转站", "Add custom API / relay"))
                     .font(.system(size: 14, weight: .semibold))
@@ -488,17 +497,21 @@ struct APIForm: View {
                     }
                 }
 
-                section(L("模型（可选）", "Models (optional)")) {
-                    FormGroup {
-                        ModelRow(title: L("默认模型", "Default"), options: model.apiModels, value: $model.draftModel)
-                        FormDivider()
-                        ModelRow(title: "Opus", options: model.apiModels, value: $model.draftOpus)
-                        FormDivider()
-                        ModelRow(title: "Sonnet", options: model.apiModels, value: $model.draftSonnet)
-                        FormDivider()
-                        ModelRow(title: "Haiku", options: model.apiModels, value: $model.draftHaiku)
-                        FormDivider()
-                        ModelRow(title: L("子代理", "Subagent"), options: model.apiModels, value: $model.draftSubagent)
+                if model.provider == .codex {
+                    codexModels
+                } else {
+                    section(L("模型（可选）", "Models (optional)")) {
+                        FormGroup {
+                            ModelRow(title: L("默认模型", "Default"), options: model.apiModels, value: $model.draftModel)
+                            FormDivider()
+                            ModelRow(title: "Opus", options: model.apiModels, value: $model.draftOpus)
+                            FormDivider()
+                            ModelRow(title: "Sonnet", options: model.apiModels, value: $model.draftSonnet)
+                            FormDivider()
+                            ModelRow(title: "Haiku", options: model.apiModels, value: $model.draftHaiku)
+                            FormDivider()
+                            ModelRow(title: L("子代理", "Subagent"), options: model.apiModels, value: $model.draftSubagent)
+                        }
                     }
                 }
 
@@ -509,6 +522,61 @@ struct APIForm: View {
                     Button(editing ? L("保存", "Save") : L("添加", "Add")) { model.confirmForm() }.buttonStyle(PillButton(fill: Theme.accent))
                 }
             }
+        }
+    }
+
+    /// Codex：默认模型 + 可选的模型映射（model_catalog_json，实验性，默认关闭）
+    @ViewBuilder private var codexModels: some View {
+        section(L("模型（可选）", "Models (optional)")) {
+            FormGroup {
+                ModelRow(title: L("默认模型", "Default"), options: model.apiModels, value: $model.draftModel)
+                FormDivider()
+                FormRow(title: L("模型映射", "Mapping")) {
+                    HStack {
+                        Text(L("实验性", "Experimental")).font(.system(size: 12.5)).foregroundStyle(Theme.text2)
+                        Spacer()
+                        Toggle("", isOn: $model.draftCatalog).toggleStyle(.switch).labelsHidden().controlSize(.small)
+                            .onChange(of: model.draftCatalog) { _, on in if on, model.draftCatalogModels.isEmpty { model.draftCatalogModels = [ModelMap()] } }
+                    }
+                }
+                if model.draftCatalog {
+                    ForEach(model.draftCatalogModels.indices, id: \.self) { i in
+                        FormDivider()
+                        HStack(spacing: 8) {
+                            // 左：Codex 里显示的名字（选了右边后自动同名，可改）；右：中转站实际模型
+                            TextField(L("显示名", "Name"), text: Binding(
+                                get: { i < model.draftCatalogModels.count ? model.draftCatalogModels[i].name : "" },
+                                set: { if i < model.draftCatalogModels.count { model.draftCatalogModels[i].name = $0 } }))
+                                .textFieldStyle(.plain).font(.system(size: 12.5)).frame(width: 104)
+                            Image(systemName: "arrow.right").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.text3)
+                            ModelPicker(options: model.apiModels, value: Binding(
+                                get: { i < model.draftCatalogModels.count ? model.draftCatalogModels[i].target : "" },
+                                set: { new in
+                                    guard i < model.draftCatalogModels.count else { return }
+                                    let old = model.draftCatalogModels[i]
+                                    if old.name.isEmpty || old.name == old.target { model.draftCatalogModels[i].name = new }
+                                    model.draftCatalogModels[i].target = new
+                                }))
+                            Button { model.draftCatalogModels.remove(at: i) } label: {
+                                Image(systemName: "minus.circle.fill").foregroundStyle(Theme.text3)
+                            }
+                            .buttonStyle(.plain).help(L("移除", "Remove"))
+                        }
+                        .padding(.horizontal, 12).frame(height: 38)
+                    }
+                    FormDivider()
+                    Button { model.draftCatalogModels.append(ModelMap()) } label: {
+                        Label(L("添加模型", "Add model"), systemImage: "plus").font(.system(size: 12)).foregroundStyle(Theme.accent)
+                            .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).padding(.horizontal, 12).frame(height: 38)
+                }
+            }
+            Text(model.draftCatalog
+                 ? L("实验性：左边是 Codex 里显示的名字，右边是实际请求的模型。目录格式未公开，Codex 升级后可能失效，重启 Codex 后生效。",
+                     "Experimental: left is the name shown in Codex, right is the model requested. The catalog format is undocumented and may break after a Codex upgrade. Restart Codex to apply.")
+                 : L("默认关闭，不会写入 model_catalog_json。", "Off by default; model_catalog_json is not written."))
+                .font(.system(size: 10.5)).foregroundStyle(Theme.text3).padding(.horizontal, 4)
         }
     }
 

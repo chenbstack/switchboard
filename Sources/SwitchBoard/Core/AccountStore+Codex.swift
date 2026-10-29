@@ -60,6 +60,7 @@ extension AccountStore {
         guard let auth = await secret(target), validCodexAuth(auth) else {
             throw AppError(L("该账号的已存凭证丢失，请重新登录添加", "The saved credentials for this account are missing. Please log in and add it again"))
         }
+        try? CodexConfig.clearAPI()   // 从中转站切回订阅时，还原 config.toml
         do { try CodexLive.writeAuth(auth) } catch { throw AppError(L("写入 Codex 登录失败：\(error.localizedDescription)", "Failed to write the Codex login: \(error.localizedDescription)")) }
         guard CodexLive.identity()?.uuid == target.uuid else { throw AppError(L("切换后校验失败，请重试", "Verification after switching failed. Please try again")) }
         return synced

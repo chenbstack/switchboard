@@ -7,6 +7,12 @@ enum Provider: String, Codable, CaseIterable, Identifiable {
     var symbol: String { self == .claude ? "sparkle" : "chevron.left.forwardslash.chevron.right" }
 }
 
+/// Codex 模型映射的一条：name = 在 Codex 里显示的名字，target = 中转站实际的模型（请求里发的名字）
+struct ModelMap: Codable, Equatable {
+    var name = ""
+    var target = ""
+}
+
 /// 自定义 API / 中转站：切换时写入 ~/.claude/settings.json 的 env；密钥存在 Vault 里
 struct APIConfig: Codable, Equatable {
     var baseURL: String
@@ -18,9 +24,28 @@ struct APIConfig: Codable, Equatable {
     var haiku = ""
     /// 子代理模型（CLAUDE_CODE_SUBAGENT_MODEL）
     var subagent = ""
+    /// Codex 专用：是否开启模型映射（写 model_catalog_json，实验性），默认关闭
+    var catalog = false
+    /// Codex 专用：开启映射后，中转站实际提供的模型名
+    var catalogModels: [ModelMap] = []
 
     var host: String { URL(string: baseURL)?.host ?? baseURL }
     var hasMapping: Bool { !(model.isEmpty && opus.isEmpty && sonnet.isEmpty && haiku.isEmpty && subagent.isEmpty) }
+}
+
+extension APIConfig {
+    /// 旧版本保存的配置没有 catalog 相关字段
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        baseURL = try c.decode(String.self, forKey: .baseURL)
+        model = try c.decodeIfPresent(String.self, forKey: .model) ?? ""
+        opus = try c.decodeIfPresent(String.self, forKey: .opus) ?? ""
+        sonnet = try c.decodeIfPresent(String.self, forKey: .sonnet) ?? ""
+        haiku = try c.decodeIfPresent(String.self, forKey: .haiku) ?? ""
+        subagent = try c.decodeIfPresent(String.self, forKey: .subagent) ?? ""
+        catalog = try c.decodeIfPresent(Bool.self, forKey: .catalog) ?? false
+        catalogModels = try c.decodeIfPresent([ModelMap].self, forKey: .catalogModels) ?? []
+    }
 }
 
 struct Account: Identifiable, Codable, Equatable {
