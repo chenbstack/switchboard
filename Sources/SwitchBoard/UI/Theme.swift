@@ -79,11 +79,11 @@ func compact(_ date: Date?, now: Date = Date()) -> String {
     return "\(m / 1440)d\((m % 1440) / 60)h"
 }
 
-/// "48m · 00:50" / "1d18h · 10/28 19:00"
-func resetShort(_ date: Date?, now: Date = Date()) -> String {
-    guard let date else { return "—" }
+/// 倒计时与重置时刻分开返回，便于分列对齐："48m" + "00:50" / "1d18h" + "10/28 19:00"
+func resetParts(_ date: Date?, now: Date = Date()) -> (String, String)? {
+    guard let date else { return nil }
     let f = DateFormatter()
     f.locale = Lang.locale
     f.dateFormat = Calendar.current.isDateInToday(date) ? "HH:mm" : "M/d HH:mm"
-    return "\(compact(date, now: now)) · \(f.string(from: date))"
+    return (compact(date, now: now), f.string(from: date))
 }

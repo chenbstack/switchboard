@@ -11,7 +11,7 @@ struct RootView: View {
             case .list:
                 if model.shown.isEmpty && model.unsavedLive == nil { EmptyState(provider: model.provider) }
                 ForEach(model.shown) { acc in
-                    AccountCard(model: model, acc: acc, isBest: model.bestOtherID == acc.id)
+                    AccountCard(model: model, acc: acc)
                 }
                 if let l = model.unsavedLive { UnsavedCard(model: model, live: l) }
                 if model.provider == .codex, model.codexKeyring { KeyringNotice() }
@@ -148,7 +148,6 @@ struct HeaderBar: View {
 struct AccountCard: View {
     @ObservedObject var model: AppModel
     let acc: Account
-    let isBest: Bool
     @State private var hover = false
     @State private var confirmDelete = false
 
@@ -159,7 +158,7 @@ struct AccountCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 11) {
+            HStack(alignment: .top, spacing: 11) {
                 Avatar(key: acc.uuid, label: acc.name, size: 36, glow: isActive)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
@@ -167,11 +166,10 @@ struct AccountCard: View {
                         PlanPill(text: acc.planLabel)
                         if acc.provider == .claude, acc.api == nil { DesktopChip(mark: model.desktopMark(acc)) }
                     }
-                    Text(acc.email).font(.system(size: 11)).foregroundStyle(Theme.text2)
-                        .lineLimit(1).truncationMode(.middle)
+                    MaskedEmail(email: acc.email, reveal: hover).font(.system(size: 11)).foregroundStyle(Theme.text2)
                 }
                 Spacer(minLength: 4)
-                trailing
+                trailing.padding(.top, -5).padding(.trailing, -5)
             }
             body_
         }
@@ -217,10 +215,6 @@ struct AccountCard: View {
                 }
             }
             .transition(.opacity)
-        } else if isBest {
-            Text(L("最空闲", "Least busy")).font(.system(size: 10.5, weight: .bold))
-                .padding(.horizontal, 9).padding(.vertical, 5)
-                .background(Theme.good.opacity(0.16), in: Capsule()).foregroundStyle(Theme.good)
         }
     }
 
@@ -229,10 +223,10 @@ struct AccountCard: View {
             apiBody(api)
         } else if let u = usage {
             VStack(spacing: 8) {
-                if let m = u.session { MeterLine(title: L("5 小时", "5-hour"), meter: m) }
-                if let m = u.weekly { MeterLine(title: L("每周", "Weekly"), meter: m) }
-                if let m = u.opus { MeterLine(title: "Opus", meter: m) }
-                if let m = u.sonnet { MeterLine(title: "Sonnet", meter: m) }
+                if let m = u.session { MeterLine(title: L("5 小时", "5-hour"), meter: m, reveal: hover) }
+                if let m = u.weekly { MeterLine(title: L("每周", "Weekly"), meter: m, reveal: hover) }
+                if let m = u.opus { MeterLine(title: "Opus", meter: m, reveal: hover) }
+                if let m = u.sonnet { MeterLine(title: "Sonnet", meter: m, reveal: hover) }
                 if u.session == nil && u.weekly == nil {
                     Text(L("暂无额度数据", "No quota data")).font(.system(size: 11)).foregroundStyle(Theme.text2)
                 }
@@ -349,7 +343,7 @@ struct UnsavedCard: View {
             Image(systemName: "person.crop.circle.badge.plus").font(.system(size: 24)).foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: 2) {
                 Text(L("\(model.provider.title) 当前登录的账号", "Account currently logged in to \(model.provider.title)")).font(.system(size: 12.5, weight: .semibold))
-                Text(live.email).font(.system(size: 11)).foregroundStyle(Theme.text2).lineLimit(1).truncationMode(.middle)
+                MaskedEmail(email: live.email).font(.system(size: 11)).foregroundStyle(Theme.text2)
                 Text(L("添加后可查看额度，并一键切换", "Add it to see quota and switch in one click")).font(.system(size: 10.5)).foregroundStyle(Theme.text3)
             }
             Spacer()
@@ -535,7 +529,7 @@ struct NameForm: View {
                     Avatar(key: model.currentLive?.uuid ?? model.draftName, label: model.draftName.isEmpty ? "?" : model.draftName, size: 40)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(isSave ? L("添加当前登录账号", "Add current account") : L("重命名账号", "Rename account")).font(.system(size: 14, weight: .semibold))
-                        if isSave { Text(model.currentLive?.email ?? "").font(.system(size: 11)).foregroundStyle(Theme.text2) }
+                        if isSave { MaskedEmail(email: model.currentLive?.email ?? "").font(.system(size: 11)).foregroundStyle(Theme.text2) }
                     }
                 }
                 VStack(alignment: .leading, spacing: 6) {

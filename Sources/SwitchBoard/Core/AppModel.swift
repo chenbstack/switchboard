@@ -111,13 +111,6 @@ final class AppModel: ObservableObject {
     }
     var others: [Account] { shown.filter { $0.id != activeAccount?.id } }
 
-    /// 其他账号里 5 小时额度最充裕的那个
-    var bestOtherID: String? {
-        others.compactMap { a in usage[a.id]?.session.map { (a.id, $0.remaining) } }
-            .max { $0.1 < $1.1 }
-            .flatMap { $0.1 > 0 ? $0.0 : nil }
-    }
-
     // MARK: 生命周期
 
     /// --demo：示例数据，不碰钥匙串和网络，仅用于验证界面

@@ -18,7 +18,7 @@ English · [简体中文](README.zh-CN.md)
 ## Features
 
 - **One-click account switching** for [Claude Code](https://claude.com/claude-code) and [Codex](https://github.com/openai/codex). New sessions pick up the new account immediately.
-- **Live quota for every account** — the 5-hour and weekly windows, with the remaining percentage and the reset time. The account with the most headroom is flagged *least busy*.
+- **Live quota for every account** — the 5-hour and weekly windows, with the remaining percentage and the reset time.
 - **Menu bar gauge** — a double ring shows the active account's 5-hour (outer) and weekly (inner) quota at a glance.
 - **Claude Desktop sync** — optionally switch the Claude desktop app to the same account.
 - **Add accounts in place** — save your current login, or sign in to another account without touching the one you're using.

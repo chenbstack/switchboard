@@ -109,6 +109,8 @@ struct IconButton: View {
 struct MeterLine: View {
     let title: String
     let meter: Meter
+    /// 默认显示倒计时，为 true 时（卡片悬浮）改显示重置时刻
+    var reveal = false
     @State private var shown = 0.0
 
     var body: some View {
@@ -122,15 +124,23 @@ struct MeterLine: View {
                 .contentTransition(.numericText())
                 .frame(width: 38, alignment: .trailing)
             TimelineView(.periodic(from: .now, by: 30)) { ctx in
-                Text(resetShort(meter.resetsAt, now: ctx.date))
+                Text(resetText(now: ctx.date))
                     .font(.system(size: 10.5).monospacedDigit()).foregroundStyle(Theme.text2)
                     .lineLimit(1).minimumScaleFactor(0.85)
+                    .contentTransition(.opacity)
+                    .animation(.easeOut(duration: 0.15), value: reveal)
             }
-            .frame(width: 106, alignment: .trailing)
-            .help(L("重置时间：\(clock(meter.resetsAt))", "Resets at \(clock(meter.resetsAt))"))
+            .frame(width: 58, alignment: .trailing)
         }
         .onAppear { withAnimation(.spring(response: 0.7, dampingFraction: 0.85)) { shown = meter.remaining } }
         .onChange(of: meter.remaining) { _, v in withAnimation(.spring(response: 0.7, dampingFraction: 0.85)) { shown = v } }
+    }
+}
+
+extension MeterLine {
+    func resetText(now: Date) -> String {
+        guard let (left, at) = resetParts(meter.resetsAt, now: now) else { return "—" }
+        return reveal ? at : left
     }
 }
 
@@ -184,5 +194,40 @@ struct DesktopChip: View {
                 .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(.white.opacity(0.28), lineWidth: 0.8))
                 .help(L("Claude 桌面端：已保存此账号的登录，切换时会同步", "Claude Desktop: login saved for this account; it syncs when you switch"))
         }
+    }
+}
+
+/// 邮箱默认把用户名中间模糊掉，鼠标悬浮时显示完整
+struct MaskedEmail: View {
+    let email: String
+    /// 外部（如整张卡片）控制是否显示完整；为 nil 时由邮箱自身的悬浮决定
+    var reveal: Bool? = nil
+    @State private var hover = false
+
+    /// (文本, 是否模糊) 片段：保留用户名前 2 位和域名后缀，中间（含 @）整体模糊
+    private var segments: [(String, Bool)]? {
+        guard let at = email.firstIndex(of: "@"), email.distance(from: email.startIndex, to: at) > 3 else { return nil }
+        let head = String(email.prefix(2))
+        if let dot = email.lastIndex(of: "."), dot > at {
+            return [(head, false), (String(email[email.index(email.startIndex, offsetBy: 2)..<dot]), true), (String(email[dot...]), false)]
+        }
+        return [(head, false), (String(email.dropFirst(2)), true)]
+    }
+
+    var body: some View {
+        Group {
+            if let segs = segments {
+                HStack(spacing: 0) {
+                    ForEach(Array(segs.enumerated()), id: \.offset) { _, seg in
+                        Text(seg.0).blur(radius: seg.1 && !(reveal ?? hover) ? 4 : 0)
+                    }
+                }
+            } else {
+                Text(email)
+            }
+        }
+        .lineLimit(1).truncationMode(.middle)
+        .animation(.easeOut(duration: 0.15), value: reveal ?? hover)
+        .onHover { hover = $0 }
     }
 }
