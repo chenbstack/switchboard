@@ -16,6 +16,15 @@ if CommandLine.arguments.contains("--scan-test") {
     exit(0)
 }
 
+if CommandLine.arguments.contains("--rank-test") {
+    MainActor.assumeIsolated {
+        let m = AppModel()
+        m.loadForDebug()
+        print(m.debugRanking(.claude))
+    }
+    exit(0)
+}
+
 let app = NSApplication.shared
 let delegate = MainActor.assumeIsolated { AppDelegate() }
 app.delegate = delegate

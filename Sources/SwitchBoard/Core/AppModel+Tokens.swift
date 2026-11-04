@@ -51,3 +51,16 @@ extension AppModel {
         tokenStats = s
     }
 }
+
+extension AppModel {
+    /// 调试：只读取本地缓存的账号 / 额度 / 采样，不联网、不写文件
+    func loadForDebug() {
+        accounts = AccountStore.load()
+        let ids = Set(accounts.map(\.id))
+        usage = AccountStore.loadUsage().filter { ids.contains($0.key) }
+        history = AccountStore.loadHistory()
+        live = ClaudeLive.identity()
+        liveCodex = CodexLive.identity()
+        recomputeDemand()
+    }
+}

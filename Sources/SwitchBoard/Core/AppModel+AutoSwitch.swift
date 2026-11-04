@@ -128,21 +128,33 @@ extension AppModel {
     /// usableNow = true：只要现在就能用的（真正切换用）；false：含马上重置的账号（排序展示用）
     func bestCandidate(for p: Provider, usableNow only: Bool = false) -> Account? {
         let pool = accounts.filter { $0.provider == p && !isActive($0) && (!only || usableNow($0)) }
-        // 账号池整体有快作废的额度（预测用不完）时，谁先到期谁先用：把额度花在最早到期的账号上，
-        // 溢出的浪费就落在最晚到期的账号身上，总浪费最少。不能只给「自己有溢出」的账号加分，
-        // 否则刚重置、周额度最晚到期的账号会因为「预计用不完」排在快到期的账号前面。
-        let poolHasSurplus = pool.contains { weeklySurplus($0, projected: true) >= expiringMin }
+        // 够用的账号里，周额度先到期的先用：先到期的账号用掉后会先重置补满，也不会白白作废；
+        // 不管账号池总额度是富余还是紧张，先用最早到期的都不会更差。
         return pool
             .compactMap { a -> (Account, [Double])? in
                 guard let score = priorityScore(a) else { return nil }
                 // 够用：有活跃速度数据时，5 小时额度至少能撑 1 小时；否则可用额度 ≥ 30%
                 let decent = lastsHours(a, rate: activeRate(p)).map { $0 >= 1 } ?? ((effectiveRemaining(a, projected: true) ?? 0) >= Self.decentQuota)
                 // 排序依据依次为：够用 > 有快作废额度 > （有快作废额度的）周额度先到期的优先 / 其余按分数
-                let expiring = poolHasSurplus && (effectiveRemaining(a, projected: true) ?? 0) >= Self.expiringUsable
+                let expiring = (effectiveRemaining(a, projected: true) ?? 0) >= Self.expiringUsable
                 let deadline = -(weeklyResetIn(a) ?? .greatestFiniteMagnitude)
                 return (a, [decent ? 1 : 0, expiring ? 1 : 0, expiring ? deadline : score])
             }
             .max { $0.1.lexicographicallyPrecedes($1.1) }?.0
+    }
+
+    /// 调试：打印候选账号的排序依据（--rank-test）
+    func debugRanking(_ p: Provider) -> String {
+        var out = "demand \(demandRate[p].map { String(format: "%.2f", $0) } ?? "nil") active=\(activeAccount?.name ?? "-")\n"
+        let pool = accounts.filter { $0.provider == p && !isActive($0) }
+        for a in pool {
+            out += String(format: "%@ eff=%@ projEff=%@ surplus=%.1f projSurplus=%.1f score=%@ lasts=%@ weeklyIn=%.1fh usableNow=%d\n", a.name,
+                          effectiveRemaining(a).map { String(format: "%.0f", $0) } ?? "nil", effectiveRemaining(a, projected: true).map { String(format: "%.0f", $0) } ?? "nil",
+                          weeklySurplus(a), weeklySurplus(a, projected: true), priorityScore(a).map { String(format: "%.1f", $0) } ?? "nil",
+                          lastsHours(a, rate: activeRate(p)).map { String(format: "%.2f", $0) } ?? "nil", (weeklyResetIn(a) ?? 0) / 3600, usableNow(a) ? 1 : 0)
+        }
+        out += "activeRate=\(activeRate(p).map { String(format: "%.2f", $0) } ?? "nil") best=\(bestCandidate(for: p)?.name ?? "nil") bestUsable=\(bestCandidate(for: p, usableNow: true)?.name ?? "nil")\n"
+        return out
     }
 
     /// 界面上标「下一个」的账号：开启建议或自动切换时显示
