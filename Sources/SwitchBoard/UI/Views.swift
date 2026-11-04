@@ -268,10 +268,13 @@ struct HeaderBar: View {
 extension AccountCard {
     /// 「下一个」徽标：优先显示预计切换时间，没有速度数据时退回「重置倒计时」
     func nextBadgeText(_ acc: Account) -> String {
-        if let cur = model.activeAccount, let m = model.minutesToSwitch(cur) {
-            if m < 1 { return L("即将切换", "Switching soon") }
-            let r = relative(Date().addingTimeInterval(m * 60))
-            return L("\(r)切换", "Switch \(r)")
+        if let cur = model.activeAccount, let at = model.switchDate(cur) {
+            if at.timeIntervalSinceNow < 60 { return L("即将切换", "Switching soon") }
+            // 预计时间太长（超过 1 小时）就不显示：那么远的预测不准，也没有参考意义
+            if at.timeIntervalSinceNow <= 3600 {
+                let r = relative(at)
+                return L("\(r)切换", "Switch \(r)")
+            }
         }
         return model.minutesToReset(acc).map { L("\($0) 分钟后重置", "Resets in \($0)m") } ?? L("下一个", "Up next")
     }
@@ -350,8 +353,10 @@ struct AccountCard: View {
             }
             .transition(.opacity)
         } else if model.autoNextID == acc.id {
-            Text(nextBadgeText(acc)).font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Theme.text3)
+            TimelineView(.periodic(from: .now, by: 20)) { _ in
+                Text(nextBadgeText(acc)).font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.text3)
+            }
         }
     }
 

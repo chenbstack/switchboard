@@ -105,14 +105,15 @@ extension AppModel {
         return max(1, Int((t / 60).rounded(.up)))
     }
 
-    /// 预计多少分钟后会触发切换（按当前账号 5 小时额度的活跃速度，到「额度低于阈值」或「快用完」先到者）；
-    /// 没在使用 / 没有速度数据 / 会先重置则没有
-    func minutesToSwitch(_ cur: Account) -> Double? {
-        guard let s = usage[cur.id]?.session, let rate = burnIfActive(cur), rate > 0 else { return nil }
+    /// 预计什么时候会触发切换（按当前账号 5 小时额度的活跃速度，到「额度低于阈值」或「快用完」先到者）。
+    /// 时间以额度的获取时刻为起点算出，之后随着时间流逝倒数；没在使用 / 没有速度数据 / 会先重置则没有
+    func switchDate(_ cur: Account) -> Date? {
+        guard let u = usage[cur.id], let s = u.session, let rate = burnIfActive(cur), rate > 0 else { return nil }
         var t = max(0, (s.remaining - Double(autoSwitchThreshold)) / rate * 60)
         if let ex = minutesToExhaust(cur) { t = min(t, max(0, ex - Self.exhaustLeadMinutes)) }
-        if let r = s.resetsAt, r.timeIntervalSinceNow / 60 <= t { return nil }
-        return t
+        let at = u.fetchedAt.addingTimeInterval(t * 60)
+        if let r = s.resetsAt, r <= at { return nil }
+        return at
     }
 
     /// 账号见底的那个窗口是否马上就要重置（马上重置就不必切走）

@@ -14,10 +14,12 @@ extension AppModel {
         let pts = (history[a.id] ?? []).filter { now.timeIntervalSince($0.t) <= Self.burnWindow }.sorted { $0.t < $1.t }
         var drop = 0.0, secs = 0.0
         var last: Date?
+        let halfLife: TimeInterval = 20 * 60   // 越近的消耗权重越大，速度变慢 / 变快能更快反映出来
         for (x, y) in zip(pts, pts.dropFirst()) {
             guard let xs = x.s, let ys = y.s, ys < xs, sameWindow(x.sr, y.sr) else { continue }
-            drop += xs - ys
-            secs += y.t.timeIntervalSince(x.t)
+            let w = pow(0.5, now.timeIntervalSince(y.t) / halfLife)
+            drop += (xs - ys) * w
+            secs += y.t.timeIntervalSince(x.t) * w
             last = y.t
         }
         guard drop > 0, secs > 0, let last else { return nil }
