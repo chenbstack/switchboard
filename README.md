@@ -21,6 +21,7 @@ English · [简体中文](README.zh-CN.md)
 - **Live quota for every account** — the 5-hour and weekly windows, with the remaining percentage and the reset time.
 - **Menu bar gauge** — a double ring shows the active account's 5-hour (outer) and weekly (inner) quota at a glance.
 - **Switch suggestions / auto-switch** — when the active account is nearly out of quota, or another account has weekly quota about to expire unused, SwitchBoard suggests (popup) or performs a switch by priority. Off by default.
+- **Local token usage** — a *Usage* page (footer) totals the tokens read from your local Claude / Codex session logs: today or the last 7 days, cache hit rate, input / output / cache read / cache write / reasoning, and a per-model list with estimated cost (Claude) and generation speed (Claude).
 - **Claude Desktop sync** — optionally switch the Claude desktop app to the same account.
 - **Add accounts in place** — save your current login, or sign in to another account without touching the one you're using.
 - **Cached quota** — the last known numbers show instantly on launch; refreshes run one account at a time.
@@ -65,7 +66,17 @@ At least 10 minutes between switches; *Dismiss* mutes the same account and reaso
 
 > A switch affects new sessions only — restart open ones. After switching accounts, old sessions may show a "Claude can't use thinking from another organization" notice; it only costs some extra tokens.
 
-**Not-enough-quota warning**: SwitchBoard projects the next 7 days at your recent usage pace (each account's weekly quota refills at its reset, earliest reset used first). If there would be a stretch where every account's weekly quota is exhausted, the panel shows a notice with roughly when that happens and how many hours over the next 7 days nothing is available — a hint to add an account or upgrade a plan.
+**Not-enough-quota warning**: SwitchBoard projects the next 7 days at your recent usage pace (each account's weekly quota refills at its reset, earliest reset used first). If there would be a stretch where every account's weekly quota is exhausted, a small *Quota short* badge appears in the header; hover or click it to see roughly when that happens and how many hours over the next 7 days nothing is available — a hint to add an account or upgrade a plan. It needs at least a day of usage data before it shows, so a short burst isn't mistaken for your normal pace.
+
+## Token usage
+
+Click **Usage** in the panel footer. The page follows the provider switcher (Claude / Codex) and shows **Today** or **7 days**: total tokens, cache hit rate, input / output / cache read / cache write / reasoning tokens, and a per-model breakdown.
+
+- **Where the numbers come from** — SwitchBoard reads the session logs already on your machine (`~/.claude/projects`, `~/.codex/sessions`). Nothing is uploaded. Chats in the Claude web or desktop app are not in those logs, so they aren't counted.
+- **Scanning** — the first launch reads the last 7 days (about 10 s for a few GB of logs); after that only newly appended lines are read, and the counts are kept per hour in `tokens.json`.
+- **Cost** — an estimate at API prices (cache read 0.1×, cache write 1.25× / 2×), shown only for Claude models with known prices. It is not what you pay on a subscription.
+- **Speed (tok/s)** — Claude only: output tokens divided by the streaming time after the first content block, so first-token latency is excluded. It is an estimate; messages without a thinking block first are skipped.
+- **Used for forecasts** — SwitchBoard also records which account was active over time. Once an account's weekly window lies fully inside that record, its used quota is matched against the cost in the logs to estimate how much quota a dollar of usage consumes. That estimate replaces the quota-sample-based usage speed for Claude, and falls back to the samples while there is not enough data.
 
 ## How it works & privacy
 
