@@ -53,12 +53,17 @@ struct TokenStats: Codable {
         var model: String?
         var lastID: String?
         var lastTotal = 0
-        var lastTS: Double = 0
+        /// 当前这条 Claude 消息：上一行时间、可计入速度的 token（只有首块是 thinking 时才能扣掉首块）、模型
+        var msgTS: Double = 0
+        var msgTok = 0
+        var msgModel: String?
+        var msgPaid = false
     }
     var files: [String: FileState] = [:]
     /// key = "provider|model|hourEpoch"
     var buckets: [String: TokenBucket] = [:]
-    var version = 1
+    static let current = 2   // 2：速度改为只算流式生成阶段，旧数据作废重扫
+    var version = TokenStats.current
     /// 统计起点：首次安装只回溯几天，之后一直增量累积
     var since: Double = 0
 }
@@ -66,7 +71,7 @@ struct TokenStats: Codable {
 enum TokenStatsStore {
     static let file = AccountStore.dir.appendingPathComponent("tokens.json")
     static func load() -> TokenStats {
-        guard let d = try? Data(contentsOf: file), let s = try? JSONDecoder().decode(TokenStats.self, from: d) else { return TokenStats() }
+        guard let d = try? Data(contentsOf: file), let s = try? JSONDecoder().decode(TokenStats.self, from: d), s.version == TokenStats.current else { return TokenStats() }
         return s
     }
     static func save(_ s: TokenStats) {
@@ -128,7 +133,6 @@ enum TokenScanner {
 
     private static func scanFile(_ url: URL, provider: Provider, state st: inout TokenStats.FileState, stats: inout TokenStats) {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return }
-        var uuidTS: [String: String] = [:]
         let nl = UInt8(ascii: "\n")
         data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             let buf = raw.bindMemory(to: UInt8.self)
@@ -140,7 +144,7 @@ enum TokenScanner {
                 let line = UnsafeBufferPointer(rebasing: buf[pos..<end])
                 pos = end + 1
                 if line.isEmpty { continue }
-                if provider == .claude { claudeLine(line, &st, &stats, &uuidTS) } else { codexLine(line, &st, &stats) }
+                if provider == .claude { claudeLine(line, &st, &stats) } else { codexLine(line, &st, &stats) }
             }
             st.offset = pos
         }
@@ -176,11 +180,7 @@ enum TokenScanner {
 
     // MARK: Claude
 
-    private static func claudeLine(_ line: UnsafeBufferPointer<UInt8>, _ st: inout TokenStats.FileState, _ stats: inout TokenStats, _ uuidTS: inout [String: String]) {
-        if let u = field(line, "\"uuid\":\""), let t = field(line, "\"timestamp\":\"") {
-            if uuidTS.count > 4000 { uuidTS.removeAll(keepingCapacity: true) }
-            uuidTS[u] = t
-        }
+    private static func claudeLine(_ line: UnsafeBufferPointer<UInt8>, _ st: inout TokenStats.FileState, _ stats: inout TokenStats) {
         if contains(line, "\"session-owner\"") {
             if let o = obj(line), let a = o["accountUuid"] as? String { st.account = a }
             return
@@ -192,7 +192,17 @@ enum TokenScanner {
               let t = ts(o["timestamp"] as? String) else { return }
         // 同一条消息会按内容块拆成多行，用量相同，只记一次（取最后一行）
         let id = msg["id"] as? String
-        if let id, id == st.lastID { return }
+        if let id, id == st.lastID {
+            // 同一条消息的后续内容块：从首块完成到这一块完成，是纯生成时间（不含首 token 延迟）
+            if st.msgTok > 0, t - st.msgTS > 0 {
+                var b = TokenBucket()
+                b.speedSecs = t - st.msgTS
+                if !st.msgPaid { b.speedTokens = st.msgTok; st.msgPaid = true }   // token 只记一次，时间逐块累加
+                add(&stats, .claude, st.msgModel ?? model, t, b)
+            }
+            st.msgTS = t
+            return
+        }
         st.lastID = id
         let inp = u["input_tokens"] as? Int ?? 0, out = u["output_tokens"] as? Int ?? 0
         let cr = u["cache_read_input_tokens"] as? Int ?? 0, cw = u["cache_creation_input_tokens"] as? Int ?? 0
@@ -201,9 +211,11 @@ enum TokenScanner {
         let w1h = min(cw, cc?["ephemeral_1h_input_tokens"] as? Int ?? 0)
         var b = TokenBucket(input: inp, output: out, cacheRead: cr, cacheWrite: cw, messages: 1)
         b.cost = TokenPrice.cost(model, input: inp, output: out, cacheRead: cr, write5m: cw - w1h, write1h: w1h)
-        if out >= 50, let p = o["parentUuid"] as? String, let pt = ts(uuidTS[p]), t - pt > 0.5, t - pt < 600 {
-            b.speedTokens = out; b.speedSecs = t - pt
-        }
+        // 首块是 thinking 时，扣掉它的 token，剩下的是首块完成之后生成的
+        let first = ((msg["content"] as? [[String: Any]])?.first?["type"] as? String)
+        let think = (u["output_tokens_details"] as? [String: Any])?["thinking_tokens"] as? Int ?? 0
+        st.msgTS = t; st.msgModel = model; st.msgPaid = false
+        st.msgTok = first == "thinking" && out - think >= 30 ? out - think : 0
         add(&stats, .claude, model, t, b)
     }
 
@@ -219,7 +231,6 @@ enum TokenScanner {
               let info = p["info"] as? [String: Any], let last = info["last_token_usage"] as? [String: Any],
               let t = ts(o["timestamp"] as? String) else { return }
         let total = (info["total_token_usage"] as? [String: Any])?["total_tokens"] as? Int ?? 0
-        defer { st.lastTS = t }
         if total > 0 && total == st.lastTotal { return }   // 重复上报
         st.lastTotal = total
         let inp = last["input_tokens"] as? Int ?? 0, cached = last["cached_input_tokens"] as? Int ?? 0
@@ -227,29 +238,7 @@ enum TokenScanner {
         let cw = last["cache_write_input_tokens"] as? Int ?? 0
         var b = TokenBucket(input: max(0, inp - cached), output: max(0, out - rea), cacheRead: cached, cacheWrite: cw, reasoning: rea, messages: 1)
         guard b.total > 0 else { return }
-        if out >= 50, st.lastTS > 0, t - st.lastTS > 0.5, t - st.lastTS < 300 {
-            b.speedTokens = out; b.speedSecs = t - st.lastTS
-        }
         add(&stats, .codex, st.model ?? "codex", t, b)
-    }
-
-    /// 取 `"key":"value"` 的 value（不做 JSON 转义处理，仅用于 uuid / 时间戳）
-    private static func field(_ line: UnsafeBufferPointer<UInt8>, _ key: StaticString) -> String? {
-        let n = key.utf8CodeUnitCount, p = key.utf8Start
-        guard line.count > n + 2 else { return nil }
-        var i = 0
-        // uuid / timestamp 都在行首附近；只扫前 600 字节
-        let last = min(line.count, 600) - n
-        while i <= last {
-            if line[i] == p[0] && memcmp(line.baseAddress! + i, p, n) == 0 {
-                var j = i + n
-                let st = j
-                while j < line.count && line[j] != UInt8(ascii: "\"") { j += 1 }
-                return String(decoding: UnsafeBufferPointer(rebasing: line[st..<j]), as: UTF8.self)
-            }
-            i += 1
-        }
-        return nil
     }
 
     private static func obj(_ line: UnsafeBufferPointer<UInt8>) -> [String: Any]? {
