@@ -29,13 +29,10 @@ struct PanelRoot: View {
     @ObservedObject var model: AppModel
     var onHeight: (CGFloat) -> Void
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            RootView(model: model)
-                .background(GeometryReader { g in Color.clear.preference(key: HeightKey.self, value: g.size.height) })
-        }
-        .frame(width: Theme.panelWidth)
-        .background(PanelBackground())
-        .onPreferenceChange(HeightKey.self) { onHeight($0) }
+        RootView(model: model)
+            .frame(width: Theme.panelWidth)
+            .background(PanelBackground())
+            .onPreferenceChange(SumHeightKey.self) { onHeight($0) }
     }
 }
 
@@ -123,7 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let i = CommandLine.arguments.firstIndex(of: "--snapshot"), i + 1 < CommandLine.arguments.count {
             let path = CommandLine.arguments[i + 1]
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                let view = RootView(model: self.model).frame(width: Theme.panelWidth)
+                let view = RootView(model: self.model, scrolls: false).frame(width: Theme.panelWidth)
                     .background(PanelBackground())
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .environment(\.colorScheme, .dark)

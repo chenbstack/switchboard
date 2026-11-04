@@ -16,12 +16,16 @@ enum Route: Equatable {
     case waitingLogin
     case addAPI          // 添加自定义 API
     case editAPI(String) // 编辑自定义 API，账号 id
+    case usage           // token 用量页
 }
 
 @MainActor
 final class AppModel: ObservableObject {
     @Published var accounts: [Account] = []
     @Published var live: LiveIdentity?
+    @Published var tokenStats = TokenStats()
+    @Published var usageDays = 1
+    @Published var tokenScanning = false
     @Published var usage: [String: UsageInfo] = [:]
     @Published var status: [String: AccountStatus] = [:]
     @Published var route: Route = .list
@@ -190,6 +194,8 @@ final class AppModel: ObservableObject {
             }
         }
         recomputeDemand()
+        seedDemoTokens()
+        if CommandLine.arguments.contains("--demo-usage") { route = .usage }
         autoSwitchIfNeeded()
         onChange?()
     }
@@ -210,6 +216,8 @@ final class AppModel: ObservableObject {
         lastUpdated = usage.values.map(\.fetchedAt).max()
         history = AccountStore.loadHistory()
         recomputeDemand()
+        tokenStats = TokenStatsStore.load()
+        scanTokens()
         live = ClaudeLive.identity()
         liveCodex = CodexLive.identity()
         Theme.current = provider
@@ -290,6 +298,7 @@ final class AppModel: ObservableObject {
     func refreshAllNow() async {
         guard !refreshing, !demo else { manualRefreshing = false; return }
         refreshing = true
+        if route == .usage { scanTokens() }
         defer {
             refreshing = false
             manualRefreshing = false

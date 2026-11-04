@@ -1,12 +1,23 @@
 import SwiftUI
 
+struct SumHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value += nextValue() }
+}
+
+private extension View {
+    func reportHeight() -> some View {
+        background(GeometryReader { g in Color.clear.preference(key: SumHeightKey.self, value: g.size.height) })
+    }
+}
+
 struct RootView: View {
     @ObservedObject var model: AppModel
+    /// false 时不用 ScrollView（离屏快照用），头尾仍按同样的顺序排列
+    var scrolls = true
 
-    var body: some View {
+    @ViewBuilder private var pageContent: some View {
         VStack(spacing: 12) {
-            HeaderBar(model: model)
-
             switch model.route {
             case .list:
                 if model.shown.isEmpty && model.unsavedLive == nil { EmptyState(provider: model.provider) }
@@ -23,11 +34,51 @@ struct RootView: View {
                 WaitingLogin(model: model)
             case .addAPI, .editAPI:
                 APIForm(model: model)
+            case .usage:
+                UsagePage(model: model)
             }
-
-            if model.route == .list { FooterBar(model: model) }
         }
-        .padding(16)
+        .padding(.horizontal, 16).padding(.vertical, 6)
+        .reportHeight()
+    }
+
+    private var header: some View {
+        HeaderBar(model: model)
+            .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 8)
+            .reportHeight()
+    }
+
+    @ViewBuilder private var footer: some View {
+        if model.route == .list {
+            FooterBar(model: model)
+                .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 12)
+                .reportHeight()
+        } else if model.route == .usage {
+            UsageFooter(model: model)
+                .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
+                .reportHeight()
+        } else {
+            Color.clear.frame(height: 10).reportHeight()
+        }
+    }
+
+    var body: some View {
+        // 头部和底栏固定并模糊，内容在它们下面滚动
+        Group {
+            if scrolls {
+                VStack(spacing: 0) {
+                    header
+                    // 内容滚到头尾附近时渐隐，露出面板自己的背景
+                    ScrollView(showsIndicators: false) { pageContent }
+                        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.035),
+                                                     .init(color: .black, location: 0.965), .init(color: .clear, location: 1)],
+                                             startPoint: .top, endPoint: .bottom))
+                    footer
+                }
+            } else {
+                VStack(spacing: 0) { header; pageContent; footer }
+            }
+        }
         .animation(.spring(response: 0.4, dampingFraction: 0.84), value: model.accounts)
         .animation(.spring(response: 0.4, dampingFraction: 0.84), value: model.route)
         .animation(.spring(response: 0.4, dampingFraction: 0.84), value: model.live)
@@ -715,6 +766,14 @@ struct FooterBar: View {
                     .font(.system(size: 10.5)).foregroundStyle(Theme.text3)
             }
             Spacer()
+            Button { model.openUsage() } label: {
+                Label(L("用量", "Usage"), systemImage: "chart.bar.fill")
+                    .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Theme.text2)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(L("查看本机 token 用量", "View local token usage"))
         }
         .padding(.horizontal, 4)
     }
