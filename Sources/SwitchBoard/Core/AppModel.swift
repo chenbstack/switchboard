@@ -55,6 +55,30 @@ final class AppModel: ObservableObject {
     @Published var refreshInterval: Int = UserDefaults.standard.object(forKey: "refreshInterval") as? Int ?? 300 {
         didSet { UserDefaults.standard.set(refreshInterval, forKey: "refreshInterval"); scheduleTimer() }
     }
+    /// 自动切换账号：额度快用完时按优先级切到最合适的账号
+    @Published var autoSwitch: Bool = UserDefaults.standard.bool(forKey: "autoSwitch") {
+        didSet { UserDefaults.standard.set(autoSwitch, forKey: "autoSwitch"); if autoSwitch { requestNotificationPermission() }; autoSwitchIfNeeded() }
+    }
+    /// 建议切换：满足条件时在菜单栏下弹小提示，由用户确认后再切
+    @Published var suggestSwitch: Bool = UserDefaults.standard.object(forKey: "suggestSwitch") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(suggestSwitch, forKey: "suggestSwitch"); autoSwitchIfNeeded() }
+    }
+    @Published var suggestion: SwitchSuggestion?
+    var snoozed: [String: Date] = [:]
+    /// 剩余额度低于该百分比触发自动切换
+    @Published var autoSwitchThreshold: Int = UserDefaults.standard.object(forKey: "autoSwitchThreshold") as? Int ?? 5 {
+        didSet { UserDefaults.standard.set(autoSwitchThreshold, forKey: "autoSwitchThreshold"); autoSwitchIfNeeded() }
+    }
+    /// 周额度「快作废」部分达到该百分比，才会为了优先消耗它而切换
+    @Published var expiringThreshold: Int = AppModel.savedExpiring() {
+        didSet { UserDefaults.standard.set(expiringThreshold, forKey: "expiringThreshold"); autoSwitchIfNeeded() }
+    }
+    /// 读取已保存的快作废阈值；不在当前选项里（旧版本的值）就用默认 25
+    fileprivate static func savedExpiring() -> Int {
+        let v = UserDefaults.standard.object(forKey: "expiringThreshold") as? Int ?? 25
+        return AppModel.expiringOptions.contains(v) ? v : 25
+    }
+    var lastAutoSwitch: Date?
     @Published var updating = false
     @Published var switching: String?
     @Published var refreshing = false
@@ -149,6 +173,11 @@ final class AppModel: ObservableObject {
                                 api: APIConfig(baseURL: "https://api.relay-demo.com/v1", model: "gpt-5.5", catalog: true, catalogModels: [ModelMap(name: "GPT-5.5", target: "gpt-5.5"), ModelMap(name: "mini", target: "gpt-5.5-mini")])))
         apiOK = ["relay-a", "relay-cx"]
         lastUpdated = now
+        // 调试：--demo-suggest 让 personal 的周额度快重置，触发建议提示
+        if CommandLine.arguments.contains("--demo-suggest") {
+            usage["personal"]?.weekly = Meter(remaining: 70, resetsAt: now.addingTimeInterval(6 * 3600))
+        }
+        autoSwitchIfNeeded()
         onChange?()
     }
 
@@ -221,6 +250,7 @@ final class AppModel: ObservableObject {
     }
 
     func reloadLive() {
+        if demo { return }   // 演示数据不被真实登录状态覆盖
         live = ClaudeLive.identity()
         liveCodex = CodexLive.identity()
         apiActive = ClaudeLive.activeAPIID()
@@ -278,6 +308,7 @@ final class AppModel: ObservableObject {
             onChange?()
         }
         AccountStore.saveUsage(usage)
+        autoSwitchIfNeeded()
     }
 
     /// 有账号因网络问题失败时，20 秒后自动再试，最多连续 3 次
@@ -302,7 +333,7 @@ final class AppModel: ObservableObject {
 
     // MARK: 切换
 
-    func switchTo(_ acc: Account) {
+    func switchTo(_ acc: Account, auto: AutoSwitchReason? = nil) {
         guard switching == nil, !isActive(acc), !blockedByDemo() else { return }
         switching = acc.id
         Task {
@@ -321,7 +352,8 @@ final class AppModel: ObservableObject {
                 else if acc.provider == .claude, syncDesktop, ClaudeDesktop.installed, desktopSaved.contains(acc.id) || desktopOwner == acc.id {
                     if desktopOwner != acc.id { note = await switchDesktop(acc, quiet: true) ? L("桌面端已同步，", "Desktop synced. ") + note : note }
                 }
-                say(L("已切换到 \(acc.name) · \(note)", "Switched to \(acc.name) · \(note)"))
+                if let auto { notifyAutoSwitch(auto, to: acc.name) }
+                else { say(L("已切换到 \(acc.name) · \(note)", "Switched to \(acc.name) · \(note)")) }
                 await refreshAllNow()
             } catch {
                 say(error.localizedDescription)

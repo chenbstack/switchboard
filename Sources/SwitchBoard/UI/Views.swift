@@ -119,6 +119,24 @@ struct HeaderBar: View {
                     Text(L("30 分钟", "30 min")).tag(1800)
                     Text(L("仅手动", "Manual only")).tag(0)
                 }
+                Menu(L("账号切换", "Account switching")) {
+                    Picker(L("切换方式", "Mode"), selection: Binding(
+                        get: { model.autoSwitch ? 2 : model.suggestSwitch ? 1 : 0 },
+                        set: { model.autoSwitch = $0 == 2; model.suggestSwitch = $0 == 1 }
+                    )) {
+                        Text(L("关闭", "Off")).tag(0)
+                        Text(L("建议切换（弹窗确认）", "Suggest (confirm)")).tag(1)
+                        Text(L("自动切换", "Auto-switch")).tag(2)
+                    }
+                    .pickerStyle(.inline)
+                    Divider()
+                    Picker(L("额度低于多少时切走", "Switch away below"), selection: $model.autoSwitchThreshold) {
+                        ForEach(AppModel.autoSwitchThresholds, id: \.self) { Text(L("剩余 \($0)%", "\($0)% left")).tag($0) }
+                    }
+                    Picker(L("快作废额度达到多少时切过去", "Switch to expiring quota ≥"), selection: $model.expiringThreshold) {
+                        ForEach(AppModel.expiringOptions, id: \.self) { Text("\($0)%").tag($0) }
+                    }
+                }
                 Picker("Language / 语言", selection: $model.language) {
                     Text("Auto / 跟随系统").tag("auto")
                     Text("English").tag("en")
@@ -217,6 +235,11 @@ struct AccountCard: View {
                 }
             }
             .transition(.opacity)
+        } else if model.autoNextID == acc.id {
+            Text(model.minutesToReset(acc).map { L("下一个 · \($0) 分钟后重置", "Up next · resets in \($0)m") } ?? L("下一个", "Up next")).font(.system(size: 11, weight: .medium))
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(.white.opacity(0.07), in: Capsule())
+                .foregroundStyle(Theme.text2)
         }
     }
 
@@ -705,5 +728,98 @@ struct KeyringNotice: View {
               systemImage: "info.circle")
             .font(.system(size: 11)).foregroundStyle(Theme.text2).padding(12)
             .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// 菜单栏图标下方的切换建议小提示：说明原因，并列出当前账号和建议账号的额度与重置时间
+struct SuggestionTip: View {
+    @ObservedObject var model: AppModel
+    var body: some View {
+        if let s = model.suggestion {
+            let from = model.accounts.first { $0.id == s.fromID }
+            let to = model.accounts.first { $0.id == s.targetID }
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 7) {
+                    Image(systemName: "arrow.left.arrow.right").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.accent)
+                    Text(L("建议切换账号", "Suggested account switch"))
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text1)
+                    Spacer()
+                    Text(s.provider.title).font(.system(size: 10.5, weight: .medium)).foregroundStyle(Theme.text2)
+                }
+                VStack(spacing: 8) {
+                    if let from { TipAccount(model: model, acc: from, role: L("当前", "Current"), highlight: false) }
+                    if let to { TipAccount(model: model, acc: to, role: L("建议", "Suggested"), highlight: true) }
+                }
+                HStack(spacing: 8) {
+                    Spacer()
+                    Button(L("忽略", "Dismiss")) { model.dismissSuggestion() }
+                        .buttonStyle(PillButton(fill: .white.opacity(0.08), textColor: Theme.text2, compact: true))
+                    Button(L("切换到 \(s.targetName)", "Switch to \(s.targetName)")) { model.acceptSuggestion() }
+                        .buttonStyle(PillButton(fill: Theme.accent))
+                }
+            }
+            .padding(14)
+            .frame(width: 360)
+            .background(PanelBackground())
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Theme.accent.opacity(0.5), lineWidth: 1))
+            .preferredColorScheme(.dark)
+        }
+    }
+}
+
+private struct TipAccount: View {
+    @ObservedObject var model: AppModel
+    let acc: Account
+    let role: String
+    let highlight: Bool
+    var body: some View {
+        let u = model.usage[acc.id]
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Avatar(key: acc.uuid, label: acc.name, size: 24)
+                Text(acc.name).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Theme.text1).lineLimit(1)
+                PlanPill(text: acc.planLabel)
+                Spacer()
+                Text(role).font(.system(size: 10.5, weight: .semibold))
+                    .padding(.horizontal, 8).padding(.vertical, 2.5)
+                    .background((highlight ? Theme.accent : Color.white).opacity(highlight ? 0.2 : 0.07), in: Capsule())
+                    .foregroundStyle(highlight ? Theme.accent : Theme.text2)
+            }
+            if let m = u?.session { TipMeter(title: L("5 小时", "5-hour"), meter: m) }
+            if let m = u?.weekly { TipMeter(title: L("每周", "Weekly"), meter: m) }
+            if u?.session == nil && u?.weekly == nil {
+                Text(L("暂无额度数据", "No quota data")).font(.system(size: 11)).foregroundStyle(Theme.text2)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(highlight ? Theme.accent.opacity(0.12) : .white.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(highlight ? Theme.accent.opacity(0.6) : .white.opacity(0.08), lineWidth: highlight ? 1.2 : 0.8))
+    }
+}
+
+/// 一行额度：进度条 + 剩余% + 「距重置 · 重置时刻」
+private struct TipMeter: View {
+    let title: String
+    let meter: Meter
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.text2)
+                .frame(width: 44, alignment: .leading)
+            Bar(value: meter.remaining, tint: Theme.tint(meter.remaining), height: 5)
+            Text("\(Int(meter.remaining.rounded()))%")
+                .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
+                .foregroundStyle(Theme.tint(meter.remaining))
+                .frame(width: 36, alignment: .trailing)
+            Text(resetLabel)
+                .font(.system(size: 10.5).monospacedDigit()).foregroundStyle(Theme.text2)
+                .lineLimit(1).minimumScaleFactor(0.8)
+                .frame(width: 100, alignment: .trailing)
+        }
+    }
+    private var resetLabel: String {
+        guard let (left, at) = resetParts(meter.resetsAt) else { return "—" }
+        return L("\(left)后 · \(at)", "in \(left) · \(at)")
     }
 }

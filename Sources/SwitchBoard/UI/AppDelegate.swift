@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 final class HUDPanel: NSPanel {
     override var canBecomeKey: Bool { true }
@@ -45,6 +46,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: HUDPanel!
     var outsideMonitor: Any?
     var contentHeight: CGFloat = 320
+    var tip: HUDPanel!
+    var tipHost: NSHostingView<SuggestionTip>!
+    var bag = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 单实例
@@ -96,6 +100,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false   // 切到浏览器等其他 App 时不自动隐藏
+
+        // 切换建议的小提示框（菜单栏图标下方）
+        tipHost = NSHostingView(rootView: SuggestionTip(model: model))
+        tip = HUDPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
+                       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        tip.contentView = tipHost
+        tip.isOpaque = false
+        tip.backgroundColor = .clear
+        tip.hasShadow = true
+        tip.level = .statusBar
+        tip.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        tip.isReleasedWhenClosed = false
+        tip.hidesOnDeactivate = false
+        model.$suggestion.receive(on: DispatchQueue.main).sink { [weak self] s in self?.refreshTip(s) }.store(in: &bag)
 
         model.onChange = { [weak self] in self?.updateStatusItem() }
         model.start()
@@ -183,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func show() {
         guard let button = item.button, let bw = button.window else { return }
         model.refreshIfStale()
+        tip.orderOut(nil)
         place(anchor: bw.convertToScreen(button.convert(button.bounds, to: nil)))
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -198,6 +217,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func hide() {
         panel.orderOut(nil)
         if let m = outsideMonitor { NSEvent.removeMonitor(m); outsideMonitor = nil }
+        refreshTip(model.suggestion)
+    }
+
+    /// 有建议且主面板没打开时，在菜单栏图标下方显示提示；否则隐藏
+    func refreshTip(_ s: SwitchSuggestion?) {
+        guard s != nil, !panel.isVisible, let button = item.button, let bw = button.window else { tip.orderOut(nil); return }
+        tipHost.layoutSubtreeIfNeeded()
+        let size = tipHost.fittingSize
+        let anchor = bw.convertToScreen(button.convert(button.bounds, to: nil))
+        let screen = NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.main
+        var x = anchor.midX - size.width / 2
+        if let vf = screen?.visibleFrame { x = min(max(x, vf.minX + 8), vf.maxX - size.width - 8) }
+        tip.setFrame(NSRect(x: x, y: anchor.minY - 8 - size.height, width: size.width, height: size.height), display: true)
+        tip.orderFrontRegardless()
     }
 
     func place(anchor: NSRect) {
