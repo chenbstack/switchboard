@@ -79,9 +79,19 @@ enum TokenStatsStore {
 enum TokenScanner {
     static let keepDays = 8.0
     /// 首次扫描只回溯这么多天；之后靠增量累积，7 天视图会随使用时间自然填满
-    static let initialDays = 2.0
+    static let initialDays = 7.0
 
     static func scan(_ stats: inout TokenStats, now: Date = Date()) {
+        if scanOnce(&stats, now: now) {
+            // 发现统计起点之前、7 天内还有没统计过的日志：从头按 7 天重扫一次
+            stats = TokenStats()
+            _ = scanOnce(&stats, now: now)
+        }
+    }
+
+    /// 返回 true 表示需要回填重扫
+    private static func scanOnce(_ stats: inout TokenStats, now: Date) -> Bool {
+        var needsBackfill = false
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
         let cutoff = now.addingTimeInterval(-keepDays * 86400)
@@ -96,7 +106,10 @@ enum TokenScanner {
                 guard let mt = v?.contentModificationDate, mt >= cutoff, let size = v?.fileSize else { continue }
                 var st = stats.files[url.path] ?? TokenStats.FileState()
                 // 没扫过的文件：只处理起点之后还有改动的（旧文件直接忽略，不读）
-                if stats.files[url.path] == nil && mt < firstCutoff { continue }
+                if stats.files[url.path] == nil && mt < firstCutoff {
+                    if mt >= now.addingTimeInterval(-initialDays * 86400) { needsBackfill = true }
+                    continue
+                }
                 live.insert(url.path)
                 if size < st.offset { st = TokenStats.FileState() }   // 文件被截断/重写
                 guard size > st.offset else { continue }
@@ -108,6 +121,7 @@ enum TokenScanner {
         stats.files = stats.files.filter { live.contains($0.key) }
         let minHour = cutoff.timeIntervalSince1970 - 3600
         stats.buckets = stats.buckets.filter { (Double($0.key.split(separator: "|").last ?? "0") ?? 0) >= minHour }
+        return needsBackfill
     }
 
     // MARK: 单文件
