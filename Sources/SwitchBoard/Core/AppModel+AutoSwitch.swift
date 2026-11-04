@@ -51,6 +51,8 @@ extension AppModel {
     private var expiringMin: Double { Double(expiringThreshold) }
     /// 主动切换：候选账号现在可用额度至少这么多（%）
     private static let expiringUsable = 25.0
+    /// 主动切换：当前账号可用额度高于这个值时不主动切（额度还多的时候不打扰）
+    private static let expiringCurrentMax = 10.0
 
     /// 重置预测：窗口在这么久内就会重置的，排序时按「已重置」(100%) 计算
     static let predictHorizon: TimeInterval = 60 * 60
@@ -184,7 +186,7 @@ extension AppModel {
             // （始终先用最先到期的，所以不会来回切）
             let curHasSurplus = weeklySurplus(cur) >= expiringMin
             let nextFirst = (weeklyResetIn(next) ?? .greatestFiniteMagnitude) < (weeklyResetIn(cur) ?? .greatestFiniteMagnitude)
-            if !curHasSurplus || nextFirst, weeklySurplus(next) >= expiringMin, (effectiveRemaining(next) ?? 0) >= Self.expiringUsable,
+            if curEff <= Self.expiringCurrentMax, !curHasSurplus || nextFirst, weeklySurplus(next) >= expiringMin, (effectiveRemaining(next) ?? 0) >= Self.expiringUsable,
                let w = usage[next.id]?.weekly, let reset = w.resetsAt {
                 return (next, .expiring(from: cur.name, weeklyLeft: Int(w.remaining.rounded()),
                                         hours: max(1, Int((reset.timeIntervalSinceNow / 3600).rounded()))), cur)

@@ -913,6 +913,9 @@ struct SuggestionTip: View {
                     Spacer()
                     Text(s.provider.title).font(.system(size: 10.5, weight: .medium)).foregroundStyle(Theme.text2)
                 }
+                Text(model.reasonText(s.reason, to: s.targetName))
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.text2)
+                    .fixedSize(horizontal: false, vertical: true)
                 VStack(spacing: 8) {
                     if let from { TipAccount(model: model, acc: from, role: L("当前", "Current"), highlight: false) }
                     if let to { TipAccount(model: model, acc: to, role: L("建议", "Suggested"), highlight: true) }
