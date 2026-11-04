@@ -13,7 +13,15 @@ enum AutoSwitchReason: Equatable {
     case low(from: String, remaining: Int)
     /// weeklyLeft：候选账号周额度剩余%；hours：距周额度重置还有多少小时
     case expiring(from: String, weeklyLeft: Int, hours: Int)
-    var kind: String { if case .low = self { return "low" } else { return "expiring" } }
+    /// 按当前速度，5 小时额度约 minutes 分钟后用完
+    case exhausting(from: String, minutes: Int)
+    var kind: String {
+        switch self {
+        case .low: return "low"
+        case .exhausting: return "exhausting"
+        case .expiring: return "expiring"
+        }
+    }
 }
 
 /// 待用户确认的切换建议
@@ -45,7 +53,7 @@ extension AppModel {
     private static let expiringUsable = 25.0
 
     /// 重置预测：窗口在这么久内就会重置的，排序时按「已重置」(100%) 计算
-    private static let predictHorizon: TimeInterval = 60 * 60
+    static let predictHorizon: TimeInterval = 60 * 60
 
     /// 窗口剩余额度；projected 时，马上重置的窗口按重置后（100%）算
     private func remaining(_ m: Meter?, projected: Bool) -> Double? {
@@ -65,6 +73,8 @@ extension AppModel {
     func weeklySurplus(_ a: Account, projected: Bool = false) -> Double {
         guard let w = usage[a.id]?.weekly, let reset = w.resetsAt else { return 0 }
         if projected, reset.timeIntervalSinceNow <= Self.predictHorizon { return 0 }
+        // 有用量速度数据：用预测的「到期时还会剩多少」；否则按时间均匀消耗估算
+        if let f = wasteForecast(a.provider)?[a.id] { return min(f, w.remaining) }
         let hours = max(0, reset.timeIntervalSinceNow / 3600)
         let timeLeft = min(1, hours / Self.weekHours) * 100
         return max(0, w.remaining - timeLeft)
@@ -96,7 +106,7 @@ extension AppModel {
     }
 
     /// 账号见底的那个窗口是否马上就要重置（马上重置就不必切走）
-    private func resetsSoon(_ a: Account) -> Bool {
+    func resetsSoon(_ a: Account) -> Bool {
         guard let u = usage[a.id] else { return false }
         let metered = [u.session, u.weekly].compactMap { $0 }
         guard let low = metered.min(by: { $0.remaining < $1.remaining }), let r = low.resetsAt else { return false }
@@ -109,7 +119,8 @@ extension AppModel {
         accounts.filter { $0.provider == p && !isActive($0) && (!only || usableNow($0)) }
             .compactMap { a -> (Account, [Double])? in
                 guard let score = priorityScore(a) else { return nil }
-                let decent = (effectiveRemaining(a, projected: true) ?? 0) >= Self.decentQuota
+                // 够用：有活跃速度数据时，5 小时额度至少能撑 1 小时；否则可用额度 ≥ 30%
+                let decent = lastsHours(a, rate: activeRate(p)).map { $0 >= 1 } ?? ((effectiveRemaining(a, projected: true) ?? 0) >= Self.decentQuota)
                 // 排序依据依次为：够用 > 有快作废额度 > （有快作废额度的）周额度先到期的优先 / 其余按分数
                 let expiring = weeklySurplus(a, projected: true) >= expiringMin
                 let deadline = -(weeklyResetIn(a) ?? .greatestFiniteMagnitude)
@@ -133,9 +144,13 @@ extension AppModel {
             guard let cur = accounts.first(where: { $0.provider == p && isActive($0) }), cur.api == nil,
                   let curEff = effectiveRemaining(cur), let next = bestCandidate(for: p, usableNow: true),
                   let eff = effectiveRemaining(next, projected: true) else { continue }
-            if curEff <= Double(autoSwitchThreshold) {
-                guard !resetsSoon(cur), eff >= curEff + Self.minGain else { continue }
-                return (next, .low(from: cur.name, remaining: Int(curEff.rounded())), cur)
+            // 额度见底，或按当前速度很快就会用完
+            let isLow = curEff <= Double(autoSwitchThreshold)
+            let exhaust = minutesToExhaust(cur).flatMap { $0 <= Self.exhaustLeadMinutes ? $0 : nil }
+            if isLow || exhaust != nil {
+                guard !shouldWaitForReset(cur), eff >= curEff + Self.minGain else { continue }
+                if isLow { return (next, .low(from: cur.name, remaining: Int(curEff.rounded())), cur) }
+                return (next, .exhausting(from: cur.name, minutes: max(1, Int((exhaust ?? 0).rounded()))), cur)
             }
             // 候选有快作废额度且现在用得动；当前账号自己也有快作废额度时，只有候选的周额度比当前账号先到期才切
             // （始终先用最先到期的，所以不会来回切）
@@ -184,6 +199,9 @@ extension AppModel {
         switch reason {
         case .low(let from, let r):
             return L("\(from) 的额度只剩 \(r)%，\(to) 还有更多可用。", "\(from) is down to \(r)% quota; \(to) has more left.")
+        case .exhausting(let from, let m):
+            return L("按当前速度，\(from) 的 5 小时额度约 \(m) 分钟后用完，\(to) 还有更多可用。",
+                     "At the current pace \(from)'s 5-hour quota runs out in ~\(m) min; \(to) has more left.")
         case .expiring(let from, let left, let h):
             let t = h >= 48 ? L("\(h / 24) 天", "\(h / 24) days") : L("\(h) 小时", "\(h)h")
             return L("\(to) 的周额度还剩 \(left)%，\(t)后就重置，不用就浪费了。\(from) 目前额度仍够用。",

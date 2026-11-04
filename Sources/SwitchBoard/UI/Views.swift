@@ -14,6 +14,7 @@ struct RootView: View {
                     AccountCard(model: model, acc: acc)
                 }
                 if let l = model.unsavedLive { UnsavedCard(model: model, live: l) }
+                if let f = model.poolForecast(model.provider) { QuotaShortNotice(provider: model.provider, forecast: f) }
                 if model.provider == .codex, model.codexKeyring { KeyringNotice() }
                 AddBar(model: model)
             case .save, .rename:
@@ -252,6 +253,12 @@ struct AccountCard: View {
                 if let m = u.weekly { MeterLine(title: L("每周", "Weekly"), meter: m, reveal: hover) }
                 if let m = u.opus { MeterLine(title: "Opus", meter: m, reveal: hover) }
                 if let m = u.sonnet { MeterLine(title: "Sonnet", meter: m, reveal: hover) }
+                if let fc = model.forecastLine(acc) {
+                    Label(fc.text, systemImage: "chart.line.downtrend.xyaxis")
+                        .font(.system(size: 10.5)).foregroundStyle(fc.highlight ? Theme.accent : Theme.text2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help(fc.help)
+                }
                 if u.session == nil && u.weekly == nil {
                     Text(L("暂无额度数据", "No quota data")).font(.system(size: 11)).foregroundStyle(Theme.text2)
                 }
@@ -728,6 +735,35 @@ struct KeyringNotice: View {
               systemImage: "info.circle")
             .font(.system(size: 11)).foregroundStyle(Theme.text2).padding(12)
             .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// 总额度不够用的提醒：按当前用量速度推演，所有账号的周额度会同时用完
+struct QuotaShortNotice: View {
+    let provider: Provider
+    let forecast: PoolForecast
+
+    private func span(_ h: Double) -> String {
+        h < 48 ? L("\(Int(h.rounded())) 小时", "\(Int(h.rounded()))h") : L(String(format: "%.1f 天", h / 24), String(format: "%.1f days", h / 24))
+    }
+
+    var body: some View {
+        let t = span(forecast.firstShortHours), gap = span(forecast.unmetHours)
+        Label {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L("按你近期的用量，\(provider.title) 账号的额度可能不够用", "At your recent pace, your \(provider.title) quota may not be enough"))
+                    .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.text1)
+                Text(L("约 \(t)后所有账号的周额度会同时用完，未来 7 天里累计约有 \(gap)没有额度可用。可以考虑再加一个账号或升级套餐。",
+                       "All accounts' weekly quota is projected to run out in ~\(t), leaving ~\(gap) over the next 7 days with nothing available. Consider adding an account or upgrading."))
+                    .font(.system(size: 11)).foregroundStyle(Theme.text2).fixedSize(horizontal: false, vertical: true)
+            }
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 12)).foregroundStyle(Theme.warn)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.warn.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.warn.opacity(0.35), lineWidth: 0.8))
     }
 }
 

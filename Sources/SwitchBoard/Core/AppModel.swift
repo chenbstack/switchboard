@@ -78,6 +78,10 @@ final class AppModel: ObservableObject {
         let v = UserDefaults.standard.object(forKey: "expiringThreshold") as? Int ?? 25
         return AppModel.expiringOptions.contains(v) ? v : 25
     }
+    /// 周额度采样历史与由此估算的整体用量速度（额度单位/小时）
+    var history: [String: [UsagePoint]] = [:]
+    var demandRate: [Provider: Double] = [:]
+    var demandDetail: [Provider: DemandRates] = [:]
     var lastAutoSwitch: Date?
     @Published var updating = false
     @Published var switching: String?
@@ -177,6 +181,15 @@ final class AppModel: ObservableObject {
         if CommandLine.arguments.contains("--demo-suggest") {
             usage["personal"]?.weekly = Meter(remaining: 70, resetsAt: now.addingTimeInterval(6 * 3600))
         }
+        // 演示用的采样历史（过去 30 小时），让卡片上能看到用量预测
+        let boost = CommandLine.arguments.contains("--demo-short") ? 8.0 : 1.0   // --demo-short：用量调大，触发「总额度不够用」提醒
+        for (id, perHour) in [("work", 0.4 * boost), ("personal", 0.15 * boost), ("usa", 0.1 * boost)] {
+            guard let w = usage[id]?.weekly else { continue }
+            history[id] = (0...30).reversed().map { h in
+                UsagePoint(t: now.addingTimeInterval(-Double(h) * 3600), w: min(100, w.remaining + perHour * Double(h)), wr: w.resetsAt)
+            }
+        }
+        recomputeDemand()
         autoSwitchIfNeeded()
         onChange?()
     }
@@ -195,6 +208,8 @@ final class AppModel: ObservableObject {
         let ids = Set(accounts.map(\.id))
         usage = AccountStore.loadUsage().filter { ids.contains($0.key) }
         lastUpdated = usage.values.map(\.fetchedAt).max()
+        history = AccountStore.loadHistory()
+        recomputeDemand()
         live = ClaudeLive.identity()
         liveCodex = CodexLive.identity()
         Theme.current = provider
@@ -308,6 +323,7 @@ final class AppModel: ObservableObject {
             onChange?()
         }
         AccountStore.saveUsage(usage)
+        recordHistory()
         autoSwitchIfNeeded()
     }
 

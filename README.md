@@ -54,16 +54,18 @@ Pick a mode in **⋯ → Account switching → Mode**: **Off** (default), **Sugg
 
 **When it switches**
 
-1. **Quota nearly used up** — the active account's 5-hour or weekly quota drops to the *Switch away below* value (default 5%) and another account that is usable right now has clearly more. If the exhausted window resets within 15 minutes, it waits instead.
+1. **Quota nearly used up** — the active account's 5-hour or weekly quota drops to the *Switch away below* value (default 5%), or at the pace you're **currently using it** the 5-hour quota will run out within ~20 minutes — and another account that is usable right now has clearly more. If the 5-hour quota will last until it resets at the current pace, it waits instead (without speed data: waits if the reset is within 15 minutes).
 2. **Weekly quota about to expire** — another account has unused weekly quota that is about to reset, and its "expiring" part reaches *Switch to expiring quota ≥* (default 25%), so it is used first. If the active account has expiring quota too, it only switches when the target's weekly quota expires *earlier* — so it never ping-pongs.
 
-*Expiring quota* = weekly remaining % − (share of the weekly window left × 100), i.e. what would go unused if you burned quota evenly.
+*Expiring quota* = how much weekly quota is predicted to be left when it resets. SwitchBoard samples every account's weekly quota (kept for 72 hours), estimates your overall usage speed over the last hour, day and 72 hours (weighted 25% / 55% / 20%, favoring recent usage; a window with too little data is skipped), then simulates "earliest weekly reset is used first" to see what each account will have left. Plans differ in capacity (Pro, Max 5x, Max 20x) and are weighted accordingly — 1% of Max 20x weekly ≈ 10% of Pro. If all three windows lack data it falls back to assuming even consumption: weekly remaining % − (share of the weekly window left × 100).
 
-**How accounts are ranked**: accounts that are usable now (≥ 30% available) come first; then those whose expiring quota meets the threshold, earliest weekly reset first; the rest by `2 × expiring + 0.5 × available`. Windows that reset within 60 minutes are ranked as if already reset (100%), but it only switches once the account is actually usable.
+**How accounts are ranked**: accounts that are usable now come first (at your active pace the 5-hour quota lasts at least an hour; without speed data: ≥ 30% available); then those whose expiring quota meets the threshold, earliest weekly reset first; the rest by `2 × expiring + 0.5 × available`. Windows that reset within 60 minutes are ranked as if already reset (100%), but it only switches once the account is actually usable.
 
 At least 10 minutes between switches; *Dismiss* mutes the same account and reason for 1 hour. Checks run after every quota refresh.
 
 > A switch affects new sessions only — restart open ones. After switching accounts, old sessions may show a "Claude can't use thinking from another organization" notice; it only costs some extra tokens.
+
+**Not-enough-quota warning**: SwitchBoard projects the next 7 days at your recent usage pace (each account's weekly quota refills at its reset, earliest reset used first). If there would be a stretch where every account's weekly quota is exhausted, the panel shows a notice with roughly when that happens and how many hours over the next 7 days nothing is available — a hint to add an account or upgrade a plan.
 
 ## How it works & privacy
 

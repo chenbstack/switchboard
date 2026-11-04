@@ -48,6 +48,23 @@ enum AccountStore {
         try? enc.encode(usage).write(to: usageFile, options: .atomic)
     }
 
+    // 周额度采样历史（用于使用速度预测）
+    static let historyFile = dir.appendingPathComponent("history.json")
+
+    static func loadHistory() -> [String: [UsagePoint]] {
+        guard let d = try? Data(contentsOf: historyFile) else { return [:] }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        return (try? dec.decode([String: [UsagePoint]].self, from: d)) ?? [:]
+    }
+
+    static func saveHistory(_ h: [String: [UsagePoint]]) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        try? enc.encode(h).write(to: historyFile, options: .atomic)
+    }
+
     static func save(_ accounts: [Account]) throws {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let enc = JSONEncoder()
