@@ -6,14 +6,24 @@ extension AppModel {
         guard !demo, !tokenScanning else { return }
         tokenScanning = true
         var snapshot = tokenStats
+        let tl = timeline
         Task.detached(priority: .utility) {
-            TokenScanner.scan(&snapshot)
+            TokenScanner.scan(&snapshot, timeline: tl)
             TokenStatsStore.save(snapshot)
             await MainActor.run { [snapshot] in
                 self.tokenStats = snapshot
                 self.tokenScanning = false
+                self.recomputeDemand()
             }
         }
+    }
+
+    /// 记录当前账号的变化（演示模式不记）。晚于登录状态读取、早于下一次扫描，所以新产生的日志总能归到正确的账号
+    func recordTimeline(_ p: Provider, _ id: LiveIdentity?) {
+        guard !demo else { return }
+        let before = timeline.entries[p.rawValue]?.count
+        timeline.record(p, uuid: id?.uuid)
+        if timeline.entries[p.rawValue]?.count != before { timeline.save() }
     }
 
     func openUsage() {
@@ -30,7 +40,7 @@ extension AppModel {
             var b = TokenBucket(input: i, output: o, cacheRead: cr, cacheWrite: cw, reasoning: rea, messages: max(1, (i + o) / 9000))
             b.cost = TokenPrice.cost(m, input: i, output: o, cacheRead: cr, write5m: 0, write1h: cw)
             b.speedTokens = o; b.speedSecs = Double(o) / (m.contains("haiku") ? 150 : m.contains("sonnet") ? 74 : 56)
-            s.buckets["\(p.rawValue)|\(m)|\(base - h * 3600)", default: TokenBucket()].add(b)
+            s.buckets["\(p.rawValue)|demo|\(m)|\(base - h * 3600)", default: TokenBucket()].add(b)
         }
         for h in 0..<72 where h % 3 != 2 {
             put(.claude, "claude-opus-5-5", h, 1_200 + h * 7, 60_000, 6_800_000, 480_000)

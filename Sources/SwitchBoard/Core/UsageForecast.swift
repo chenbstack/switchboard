@@ -98,6 +98,26 @@ extension AppModel {
         AccountStore.saveHistory(history)
     }
 
+    /// 标定：Claude 每 1 美元（API 等价）的用量对应多少「额度单位」（周额度 % × 档位容量）。
+    /// 用每个账号当前周窗口里已用掉的额度，除以日志里同一时段归到该账号的费用。
+    /// 只用窗口起点晚于账号时间线开始记录的账号，否则起点前的日志没有账号标记，费用会漏算。
+    /// 网页 / 桌面端对话日志里看不到，系数会偏大，所以只是估计。
+    func unitsPerDollar() -> Double? {
+        guard let t0 = timeline.start(.claude) else { return nil }
+        var units = 0.0, cost = 0.0
+        for a in accounts where a.provider == .claude && a.api == nil && status[a.id] == nil {
+            guard let w = usage[a.id]?.weekly, let r = w.resetsAt else { continue }
+            let start = r.addingTimeInterval(-7 * 86400)
+            guard start.timeIntervalSince1970 >= t0 + 3600, start.timeIntervalSince1970 >= tokenStats.since + 3600 else { continue }
+            let used = (100 - w.remaining) * capacityWeight(a)
+            let c = tokenStats.cost(provider: .claude, account: a.uuid, from: start)
+            guard used >= 3, c >= 0.5 else { continue }
+            units += used; cost += c
+        }
+        guard cost >= 2, units > 0 else { return nil }
+        return units / cost
+    }
+
     /// 每个服务的整体用量速度（额度单位/小时）；采样不足则没有
     func recomputeDemand() {
         let now = Date()
@@ -121,7 +141,15 @@ extension AppModel {
                 }
                 return drop / (coverage / 3600)
             }
-            let r = DemandRates(hour: rate(Self.demandWindows[0]), day: rate(Self.demandWindows[1]), long: rate(Self.demandWindows[2]))
+            var r = DemandRates(hour: rate(Self.demandWindows[0]), day: rate(Self.demandWindows[1]), long: rate(Self.demandWindows[2]))
+            // Claude：能标定「每美元对应多少额度」时，用日志里的真实 token 用量代替额度采样
+            if p == .claude, let k = unitsPerDollar() {
+                let w = Self.demandWindows
+                let t = DemandRates(hour: tokenStats.costRate(provider: p, window: w[0]).map { $0 * k },
+                                    day: tokenStats.costRate(provider: p, window: w[1]).map { $0 * k },
+                                    long: tokenStats.costRate(provider: p, window: w[2]).map { $0 * k })
+                if t.blended != nil { r = t }
+            }
             if r.blended != nil { detail[p] = r }
         }
         demandDetail = detail

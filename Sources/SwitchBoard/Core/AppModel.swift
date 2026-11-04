@@ -22,7 +22,8 @@ enum Route: Equatable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var accounts: [Account] = []
-    @Published var live: LiveIdentity?
+    @Published var live: LiveIdentity? { didSet { recordTimeline(.claude, live) } }
+    var timeline = AccountTimeline()
     @Published var tokenStats = TokenStats()
     @Published var usageDays = 1
     @Published var tokenScanning = false
@@ -97,7 +98,7 @@ final class AppModel: ObservableObject {
     @Published var loginURL: String?
     @Published var loginNote: String?
     @Published var loginSame = false
-    @Published var liveCodex: LiveIdentity?
+    @Published var liveCodex: LiveIdentity? { didSet { recordTimeline(.codex, liveCodex) } }
     @Published var codexKeyring = false
     @Published var provider: Provider = Provider(rawValue: UserDefaults.standard.string(forKey: "provider") ?? "") ?? .claude {
         didSet {
@@ -217,9 +218,10 @@ final class AppModel: ObservableObject {
         history = AccountStore.loadHistory()
         recomputeDemand()
         tokenStats = TokenStatsStore.load()
-        scanTokens()
+        timeline = AccountTimeline.load()
         live = ClaudeLive.identity()
         liveCodex = CodexLive.identity()
+        scanTokens()   // 要在读到当前账号、记入时间线之后
         Theme.current = provider
         reloadDesktop()
         Task {
@@ -298,7 +300,7 @@ final class AppModel: ObservableObject {
     func refreshAllNow() async {
         guard !refreshing, !demo else { manualRefreshing = false; return }
         refreshing = true
-        if route == .usage { scanTokens() }
+        scanTokens()   // 增量扫描，日志用量参与速度预测
         defer {
             refreshing = false
             manualRefreshing = false

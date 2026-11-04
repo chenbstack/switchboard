@@ -80,7 +80,11 @@ struct UsageFooter: View {
             if model.usageDays > 1, model.tokenStats.since > Date().addingTimeInterval(-7 * 86400).timeIntervalSince1970 {
                 Text(L("统计从 ", "Counting since ") + Date(timeIntervalSince1970: model.tokenStats.since).formatted(.dateTime.month().day().hour().minute()) + L(" 开始，之后持续累积", ", accumulating from there"))
             }
-            Text(L("统计自本机 ~/.claude 与 ~/.codex 的会话日志，网页端 / 桌面端对话不在其中。tok/s 只统计流式生成阶段（不含首 token 延迟），仅 Claude 有。", "Counted from local ~/.claude and ~/.codex session logs; web / desktop chats are not included. tok/s covers streaming generation only (no first-token latency), Claude only."))
+            if model.provider == .claude {
+                Text(L("统计自本机 ~/.claude 的会话日志，网页端 / 桌面端对话不在其中。tok/s 只统计流式生成阶段，不含首 token 延迟。", "Counted from local ~/.claude session logs; web / desktop chats are not included. tok/s covers streaming generation only, without first-token latency."))
+            } else {
+                Text(L("统计自本机 ~/.codex 的会话日志，网页端 / 桌面端对话不在其中。暂不统计生成速度。", "Counted from local ~/.codex session logs; web / desktop chats are not included. Generation speed is not tracked."))
+            }
         }
         .font(.system(size: 10)).foregroundStyle(Theme.text3).fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)

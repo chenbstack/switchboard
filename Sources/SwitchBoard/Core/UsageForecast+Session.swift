@@ -83,6 +83,8 @@ extension AppModel {
     /// 如果某个时段所有账号都空了、需求还在，就是「总额度不够用」。没有速度数据 / 不缺额度返回 nil。
     func poolForecast(_ p: Provider) -> PoolForecast? {
         guard let d = demandRate[p], d > 0 else { return nil }
+        // 推演 7 天，只靠最近 1 小时的速度会把一时的高峰当成常态；至少要有 1 天窗口（采样 ≥ 6 小时）才给出结论
+        guard let det = demandDetail[p], det.day != nil || det.long != nil else { return nil }
         let items = accounts.compactMap { a -> (Double, Double, Double)? in
             guard a.provider == p, a.api == nil, status[a.id] == nil,
                   let w = usage[a.id]?.weekly, let r = w.resetsAt else { return nil }

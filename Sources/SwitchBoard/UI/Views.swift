@@ -11,8 +11,18 @@ private extension View {
     }
 }
 
+/// 滚动内容在视口里的位置 / 总高度，以及头尾高度，用来算渐进模糊的范围
+struct ScrollMetricsKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) { value.merge(nextValue()) { $1 } }
+}
+
 struct RootView: View {
     @ObservedObject var model: AppModel
+    @State private var contentTop: CGFloat = 0   // 内容顶边在视口里的 y（静止时 = 头部高度）
+    @State private var contentH: CGFloat = 0
+    @State private var headerH: CGFloat = 0
+    @State private var footerH: CGFloat = 0
     /// false 时不用 ScrollView（离屏快照用），头尾仍按同样的顺序排列
     var scrolls = true
 
@@ -25,7 +35,6 @@ struct RootView: View {
                     AccountCard(model: model, acc: acc)
                 }
                 if let l = model.unsavedLive { UnsavedCard(model: model, live: l) }
-                if let f = model.poolForecast(model.provider) { QuotaShortNotice(provider: model.provider, forecast: f) }
                 if model.provider == .codex, model.codexKeyring { KeyringNotice() }
                 AddBar(model: model)
             case .save, .rename:
@@ -62,19 +71,59 @@ struct RootView: View {
         }
     }
 
+    private func measure(_ key: String) -> some View {
+        GeometryReader { g in Color.clear.preference(key: ScrollMetricsKey.self, value: [key: g.size.height]) }
+    }
+
+    /// 内容在头部 / 底栏下面时的模糊程度：1 = 完全模糊的副本，0 = 清晰原件，中间交叉淡入淡出
+    private func blurStops(viewH: CGFloat, sharp: Bool) -> [Gradient.Stop] {
+        let fade: CGFloat = 20
+        let top = -contentTop, bottom = -contentTop + viewH
+        let pts: [(CGFloat, CGFloat)] = [
+            (top, 1), (top + headerH - fade, 1), (top + headerH, 0),
+            (bottom - footerH, 0), (bottom - footerH + fade, 1), (bottom, 1)]
+        return pts.map { y, a in
+            .init(color: .black.opacity(Double(sharp ? 1 - a : a)),
+                  location: min(1, max(0, y / contentH)))
+        }
+    }
+
+    private var scrollingBody: some View {
+        GeometryReader { outer in
+            ScrollView(showsIndicators: false) {
+                ZStack(alignment: .top) {
+                    if contentH > 0 {
+                        pageContent.mask(LinearGradient(stops: blurStops(viewH: outer.size.height, sharp: true), startPoint: .top, endPoint: .bottom))
+                        // 同一份内容的模糊副本，只在头尾下方显示：下面的内容能透出来，但是糊的
+                        pageContent.transformPreference(SumHeightKey.self) { $0 = 0 }
+                            .blur(radius: 9)
+                            .mask(LinearGradient(stops: blurStops(viewH: outer.size.height, sharp: false), startPoint: .top, endPoint: .bottom))
+                            .allowsHitTesting(false).accessibilityHidden(true)
+                    } else {
+                        pageContent
+                    }
+                }
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: ScrollMetricsKey.self, value: ["top": g.frame(in: .named("vp")).minY, "h": g.size.height])
+                })
+            }
+            .safeAreaInset(edge: .top, spacing: 0) { header.background(measure("header")) }
+            .safeAreaInset(edge: .bottom, spacing: 0) { footer.background(measure("footer")) }
+            .coordinateSpace(name: "vp")
+            .onPreferenceChange(ScrollMetricsKey.self) { m in
+                if let v = m["top"], abs(v - contentTop) > 0.5 { contentTop = v }
+                if let v = m["h"], abs(v - contentH) > 0.5 { contentH = v }
+                if let v = m["header"], abs(v - headerH) > 0.5 { headerH = v }
+                if let v = m["footer"], abs(v - footerH) > 0.5 { footerH = v }
+            }
+        }
+    }
+
     var body: some View {
         // 头部和底栏固定并模糊，内容在它们下面滚动
         Group {
             if scrolls {
-                VStack(spacing: 0) {
-                    header
-                    // 内容滚到头尾附近时渐隐，露出面板自己的背景
-                    ScrollView(showsIndicators: false) { pageContent }
-                        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.035),
-                                                     .init(color: .black, location: 0.965), .init(color: .clear, location: 1)],
-                                             startPoint: .top, endPoint: .bottom))
-                    footer
-                }
+                scrollingBody
             } else {
                 VStack(spacing: 0) { header; pageContent; footer }
             }
@@ -156,6 +205,7 @@ struct HeaderBar: View {
             }
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
             Spacer()
+            if let f = model.poolForecast(model.provider) { QuotaShortBadge(provider: model.provider, forecast: f) }
             if let u = model.update { UpdateButton(version: u.version, busy: model.updating) { model.installUpdate() } }
             IconButton(symbol: "arrow.clockwise", spinning: model.manualRefreshing) { model.refreshManually() }
             Menu {
@@ -214,6 +264,18 @@ struct HeaderBar: View {
 }
 
 // MARK: 账号卡片（所有账号同一种样式，当前账号用边框 + 背景色标识）
+
+extension AccountCard {
+    /// 「下一个」徽标：优先显示预计切换时间，没有速度数据时退回「重置倒计时」
+    func nextBadgeText(_ acc: Account) -> String {
+        if let cur = model.activeAccount, let m = model.minutesToSwitch(cur) {
+            if m < 1 { return L("即将切换", "Switching soon") }
+            let r = relative(Date().addingTimeInterval(m * 60))
+            return L("\(r)切换", "Switch \(r)")
+        }
+        return model.minutesToReset(acc).map { L("\($0) 分钟后重置", "Resets in \($0)m") } ?? L("下一个", "Up next")
+    }
+}
 
 struct AccountCard: View {
     @ObservedObject var model: AppModel
@@ -288,10 +350,8 @@ struct AccountCard: View {
             }
             .transition(.opacity)
         } else if model.autoNextID == acc.id {
-            Text(model.minutesToReset(acc).map { L("下一个 · \($0) 分钟后重置", "Up next · resets in \($0)m") } ?? L("下一个", "Up next")).font(.system(size: 11, weight: .medium))
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(.white.opacity(0.07), in: Capsule())
-                .foregroundStyle(Theme.text2)
+            Text(nextBadgeText(acc)).font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.text3)
         }
     }
 
@@ -797,10 +857,11 @@ struct KeyringNotice: View {
     }
 }
 
-/// 总额度不够用的提醒：按当前用量速度推演，所有账号的周额度会同时用完
-struct QuotaShortNotice: View {
+/// 总额度不够用的提醒：头部的小徽标，悬浮显示完整说明
+struct QuotaShortBadge: View {
     let provider: Provider
     let forecast: PoolForecast
+    @State private var show = false
 
     private func span(_ h: Double) -> String {
         h < 48 ? L("\(Int(h.rounded())) 小时", "\(Int(h.rounded()))h") : L(String(format: "%.1f 天", h / 24), String(format: "%.1f days", h / 24))
@@ -808,21 +869,27 @@ struct QuotaShortNotice: View {
 
     var body: some View {
         let t = span(forecast.firstShortHours), gap = span(forecast.unmetHours)
-        Label {
-            VStack(alignment: .leading, spacing: 3) {
+        Button { show.toggle() } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10, weight: .bold))
+                Text(L("额度不够", "Quota short")).font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(Theme.warn.opacity(0.85))
+            .padding(.horizontal, 6).frame(height: 26)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { show = $0 }
+        .popover(isPresented: $show, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(L("按你近期的用量，\(provider.title) 账号的额度可能不够用", "At your recent pace, your \(provider.title) quota may not be enough"))
-                    .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.text1)
+                    .font(.system(size: 12, weight: .semibold))
                 Text(L("约 \(t)后所有账号的周额度会同时用完，未来 7 天里累计约有 \(gap)没有额度可用。可以考虑再加一个账号或升级套餐。",
                        "All accounts' weekly quota is projected to run out in ~\(t), leaving ~\(gap) over the next 7 days with nothing available. Consider adding an account or upgrading."))
-                    .font(.system(size: 11)).foregroundStyle(Theme.text2).fixedSize(horizontal: false, vertical: true)
+                    .font(.system(size: 11.5)).foregroundStyle(.secondary)
             }
-        } icon: {
-            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 12)).foregroundStyle(Theme.warn)
+            .frame(width: 260, alignment: .leading).padding(12)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.warn.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.warn.opacity(0.35), lineWidth: 0.8))
     }
 }
 

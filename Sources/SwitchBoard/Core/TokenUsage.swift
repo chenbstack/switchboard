@@ -62,7 +62,7 @@ struct TokenStats: Codable {
     var files: [String: FileState] = [:]
     /// key = "provider|model|hourEpoch"
     var buckets: [String: TokenBucket] = [:]
-    static let current = 2   // 2：速度改为只算流式生成阶段，旧数据作废重扫
+    static let current = 3   // 3：桶按账号拆分（用于标定额度容量）
     var version = TokenStats.current
     /// 统计起点：首次安装只回溯几天，之后一直增量累积
     var since: Double = 0
@@ -80,13 +80,45 @@ enum TokenStatsStore {
     }
 }
 
+/// 「某时刻哪个账号是当前账号」：只能从开始记录起往后记。用来给日志里没有账号标记的会话归属账号
+struct AccountTimeline: Codable {
+    struct Entry: Codable { var t: Double; var uuid: String }   // uuid 为空 = 当时没有可识别的登录
+    var entries: [String: [Entry]] = [:]   // provider.rawValue → 按时间升序
+
+    mutating func record(_ p: Provider, uuid: String?, at: Date = Date()) {
+        let u = uuid ?? ""
+        var list = entries[p.rawValue] ?? []
+        if list.last?.uuid == u { return }
+        list.append(Entry(t: at.timeIntervalSince1970, uuid: u))
+        entries[p.rawValue] = list.suffix(500).map { $0 }
+    }
+    /// 某时刻的账号；早于第一条记录返回 nil
+    func account(_ p: Provider, at t: Double) -> String? {
+        guard let list = entries[p.rawValue], let first = list.first, t >= first.t else { return nil }
+        var lo = 0, hi = list.count - 1
+        while lo < hi { let m = (lo + hi + 1) / 2; if list[m].t <= t { lo = m } else { hi = m - 1 } }
+        return list[lo].uuid.isEmpty ? nil : list[lo].uuid
+    }
+    func start(_ p: Provider) -> Double? { entries[p.rawValue]?.first?.t }
+
+    static let file = AccountStore.dir.appendingPathComponent("timeline.json")
+    static func load() -> AccountTimeline { (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(AccountTimeline.self, from: $0) } ?? AccountTimeline() }
+    func save() {
+        try? FileManager.default.createDirectory(at: AccountStore.dir, withIntermediateDirectories: true)
+        if let d = try? JSONEncoder().encode(self) { try? d.write(to: Self.file, options: .atomic) }
+    }
+}
+
 /// 增量扫描 Claude / Codex 的本地会话日志。只读，不上传
 enum TokenScanner {
     static let keepDays = 8.0
+    /// 本次扫描用的账号时间线（扫描在单个后台任务里串行进行）
+    nonisolated(unsafe) private static var timeline = AccountTimeline()
     /// 首次扫描只回溯这么多天；之后靠增量累积，7 天视图会随使用时间自然填满
     static let initialDays = 7.0
 
-    static func scan(_ stats: inout TokenStats, now: Date = Date()) {
+    static func scan(_ stats: inout TokenStats, timeline: AccountTimeline = AccountTimeline(), now: Date = Date()) {
+        Self.timeline = timeline
         if scanOnce(&stats, now: now) {
             // 发现统计起点之前、7 天内还有没统计过的日志：从头按 7 天重扫一次
             stats = TokenStats()
@@ -172,10 +204,10 @@ enum TokenScanner {
 
     private static func ts(_ s: String?) -> Double? { s.flatMap { iso.date(from: $0) }?.timeIntervalSince1970 }
 
-    private static func add(_ stats: inout TokenStats, _ provider: Provider, _ model: String, _ t: Double, _ b: TokenBucket) {
+    private static func add(_ stats: inout TokenStats, _ provider: Provider, _ account: String, _ model: String, _ t: Double, _ b: TokenBucket) {
         if t < stats.since { return }
         let hour = Int(t / 3600) * 3600
-        stats.buckets["\(provider.rawValue)|\(model)|\(hour)", default: TokenBucket()].add(b)
+        stats.buckets["\(provider.rawValue)|\(account)|\(model)|\(hour)", default: TokenBucket()].add(b)
     }
 
     // MARK: Claude
@@ -198,7 +230,7 @@ enum TokenScanner {
                 var b = TokenBucket()
                 b.speedSecs = t - st.msgTS
                 if !st.msgPaid { b.speedTokens = st.msgTok; st.msgPaid = true }   // token 只记一次，时间逐块累加
-                add(&stats, .claude, st.msgModel ?? model, t, b)
+                add(&stats, .claude, st.account ?? timeline.account(.claude, at: t) ?? "-", st.msgModel ?? model, t, b)
             }
             st.msgTS = t
             return
@@ -216,7 +248,7 @@ enum TokenScanner {
         let think = (u["output_tokens_details"] as? [String: Any])?["thinking_tokens"] as? Int ?? 0
         st.msgTS = t; st.msgModel = model; st.msgPaid = false
         st.msgTok = first == "thinking" && out - think >= 30 ? out - think : 0
-        add(&stats, .claude, model, t, b)
+        add(&stats, .claude, st.account ?? timeline.account(.claude, at: t) ?? "-", model, t, b)
     }
 
     // MARK: Codex
@@ -238,7 +270,7 @@ enum TokenScanner {
         let cw = last["cache_write_input_tokens"] as? Int ?? 0
         var b = TokenBucket(input: max(0, inp - cached), output: max(0, out - rea), cacheRead: cached, cacheWrite: cw, reasoning: rea, messages: 1)
         guard b.total > 0 else { return }
-        add(&stats, .codex, st.model ?? "codex", t, b)
+        add(&stats, .codex, timeline.account(.codex, at: t) ?? "-", st.model ?? "codex", t, b)
     }
 
     private static func obj(_ line: UnsafeBufferPointer<UInt8>) -> [String: Any]? {
@@ -262,12 +294,44 @@ extension TokenStats {
         var per: [String: TokenBucket] = [:]
         for (k, b) in buckets {
             let parts = k.split(separator: "|")
-            guard parts.count == 3, parts[0] == provider.rawValue, let h = Int(parts[2]), h >= from else { continue }
-            per[String(parts[1]), default: TokenBucket()].add(b)
+            guard parts.count == 4, parts[0] == provider.rawValue, let h = Int(parts[3]), h >= from else { continue }
+            per[String(parts[2]), default: TokenBucket()].add(b)
         }
         var s = UsageSummary()
         for (_, b) in per { s.total.add(b) }
         s.byModel = per.map { ($0.key, $0.value) }.sorted { $0.1.total > $1.1.total }
         return s
+    }
+}
+
+
+// MARK: 用量 → 额度单位（标定）
+
+extension TokenStats {
+    /// 某个账号从 from 起累计的 API 等价费用（美元）
+    func cost(provider: Provider, account: String, from: Date) -> Double {
+        let h0 = Int(from.timeIntervalSince1970 / 3600) * 3600 + 3600   // 首个不完整的小时不算
+        var c = 0.0
+        for (k, b) in buckets {
+            let p = k.split(separator: "|")
+            guard p.count == 4, p[0] == provider.rawValue, p[1] == account, let h = Int(p[3]), h >= h0 else { continue }
+            c += b.cost
+        }
+        return c
+    }
+
+    /// 一个服务整体的费用速度（美元/小时）。窗口按小时桶对齐；统计范围不够长时返回 nil
+    func costRate(provider: Provider, window: TimeInterval, now: Date = Date()) -> Double? {
+        let covered = now.timeIntervalSince1970 - since
+        guard covered >= max(1800, window * 0.25) else { return nil }
+        let from = now.timeIntervalSince1970 - min(window, covered)
+        let h0 = Int(from / 3600) * 3600
+        var c = 0.0
+        for (k, b) in buckets {
+            let p = k.split(separator: "|")
+            guard p.count == 4, p[0] == provider.rawValue, let h = Int(p[3]), h >= h0 else { continue }
+            c += b.cost
+        }
+        return c / ((now.timeIntervalSince1970 - Double(h0)) / 3600)
     }
 }
