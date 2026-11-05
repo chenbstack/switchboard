@@ -10,31 +10,34 @@ struct UsagePoint: Codable, Equatable {
     var sr: Date? = nil
 }
 
-/// 同一服务的整体用量速度（额度单位/小时），分别按过去 1 小时 / 1 天 / 72 小时统计，其中 1 天和 72 小时加权合成。
+/// 同一服务的整体用量速度（额度单位/小时），分别按过去 3 小时 / 1 天 / 7 天统计，再合成。
 /// 某个窗口的采样覆盖不足（不到窗口的 25%，且至少 30 分钟）时不参与，剩下的权重重新归一。
 struct DemandRates {
     var hour: Double?
     var day: Double?
-    var long: Double?
-    /// 合成速度：1 天 70% + 72 小时 30%。1 小时的速度波动太大，只展示、不参与合成（否则 7 天预测会被一时的高峰 / 空闲带偏）
+    var week: Double?
+    /// 合成速度：基线 = 1 天 40% + 7 天 60%（7 天覆盖完整的工作日 / 周末周期）；
+    /// 近 3 小时只在高于基线时才计入（超出部分 × 30%），用来响应突然激增的用量，空闲时不会把预测拉低
     var blended: Double? {
-        let parts = [(day, 0.7), (long, 0.3)].compactMap { r, w in r.map { ($0, w) } }
+        let parts = [(day, 0.4), (week, 0.6)].compactMap { r, w in r.map { ($0, w) } }
         let total = parts.reduce(0) { $0 + $1.1 }
         guard total > 0 else { return nil }
-        return parts.reduce(0) { $0 + $1.0 * $1.1 } / total
+        let base = parts.reduce(0) { $0 + $1.0 * $1.1 } / total
+        guard let hour, hour > base else { return base }
+        return base + (hour - base) * 0.3
     }
 }
 
 /// 使用速度预测：
-/// 1. 每次刷新记录每个账号的周额度采样点（保留 72 小时）
-/// 2. 把同一服务下所有账号的消耗按「额度单位」汇总，分别算出过去 1 小时 / 1 天 / 72 小时的用量速度，加权合成
-///    —— 1 小时反映当下，1 天反映近期习惯，72 小时反映长期平均
+/// 1. 每次刷新记录每个账号的周额度采样点（保留 7 天）
+/// 2. 把同一服务下所有账号的消耗按「额度单位」汇总，分别算出过去 3 小时 / 1 天 / 7 天的用量速度，合成
+///    —— 3 小时只用于响应突增，1 天反映近期习惯，7 天反映完整周期的平均
 ///    —— 不同会员级别容量不同：Max 20x 周额度掉 1% ≈ Pro 掉 10%，所以按档位折算
 /// 3. 按「周额度先到期的先用」模拟这个速度下各账号到重置时还会剩多少，剩下的就是真正会作废的额度
 /// 三个窗口都采样不足时，退回「按时间均匀消耗」的假设。
 extension AppModel {
-    static let historyWindow: TimeInterval = 72 * 3600
-    static let demandWindows: [TimeInterval] = [3600, 24 * 3600, 72 * 3600]
+    static let historyWindow: TimeInterval = 7 * 24 * 3600
+    static let demandWindows: [TimeInterval] = [3 * 3600, 24 * 3600, 7 * 24 * 3600]
 
     /// 账号周额度的相对容量（近似值）。Max 20x 的 5 小时额度是 Pro 的 20 倍，但周额度只按 10 倍算
     func capacityWeight(_ a: Account) -> Double {
@@ -141,13 +144,13 @@ extension AppModel {
                 }
                 return drop / (coverage / 3600)
             }
-            var r = DemandRates(hour: rate(Self.demandWindows[0]), day: rate(Self.demandWindows[1]), long: rate(Self.demandWindows[2]))
+            var r = DemandRates(hour: rate(Self.demandWindows[0]), day: rate(Self.demandWindows[1]), week: rate(Self.demandWindows[2]))
             // Claude：能标定「每美元对应多少额度」时，用日志里的真实 token 用量代替额度采样
             if p == .claude, let k = unitsPerDollar() {
                 let w = Self.demandWindows
                 let t = DemandRates(hour: tokenStats.costRate(provider: p, window: w[0]).map { $0 * k },
                                     day: tokenStats.costRate(provider: p, window: w[1]).map { $0 * k },
-                                    long: tokenStats.costRate(provider: p, window: w[2]).map { $0 * k })
+                                    week: tokenStats.costRate(provider: p, window: w[2]).map { $0 * k })
                 if t.blended != nil { r = t }
             }
             if r.blended != nil { detail[p] = r }
@@ -206,8 +209,8 @@ extension AppModel {
             ? L("周额度预计作废 \(Int(waste.rounded()))%", "~\(Int(waste.rounded()))% of weekly quota expected to expire")
             : L("周额度预计能用完", "Weekly quota expected to be used up")
         func f(_ v: Double?) -> String { v.map { String(format: "%.1f%%/h", $0) } ?? "—" }
-        let help = L("用量速度（折算为 Pro 周额度）：近 1 小时 \(f(rates.hour)) · 近 1 天 \(f(rates.day)) · 近 72 小时 \(f(rates.long))；加权后 \(f(rates.blended))",
-                     "Usage speed (as Pro weekly quota): last hour \(f(rates.hour)) · last day \(f(rates.day)) · last 72h \(f(rates.long)); blended \(f(rates.blended))")
+        let help = L("用量速度（折算为 Pro 周额度）：近 3 小时 \(f(rates.hour)) · 近 1 天 \(f(rates.day)) · 近 7 天 \(f(rates.week))；加权后 \(f(rates.blended))",
+                     "Usage speed (as Pro weekly quota): last 3h \(f(rates.hour)) · last day \(f(rates.day)) · last 7d \(f(rates.week)); blended \(f(rates.blended))")
         return ForecastLine(text: text, highlight: waste >= Double(expiringThreshold), help: help)
     }
 }
