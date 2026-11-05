@@ -10,15 +10,15 @@ struct UsagePoint: Codable, Equatable {
     var sr: Date? = nil
 }
 
-/// 同一服务的整体用量速度（额度单位/小时），分别按过去 1 小时 / 1 天 / 72 小时统计，再加权合成。
+/// 同一服务的整体用量速度（额度单位/小时），分别按过去 1 小时 / 1 天 / 72 小时统计，其中 1 天和 72 小时加权合成。
 /// 某个窗口的采样覆盖不足（不到窗口的 25%，且至少 30 分钟）时不参与，剩下的权重重新归一。
 struct DemandRates {
     var hour: Double?
     var day: Double?
     var long: Double?
-    /// 合成速度：1 小时 25% + 1 天 55% + 72 小时 20%（偏重近期习惯）
+    /// 合成速度：1 天 70% + 72 小时 30%。1 小时的速度波动太大，只展示、不参与合成（否则 7 天预测会被一时的高峰 / 空闲带偏）
     var blended: Double? {
-        let parts = [(hour, 0.25), (day, 0.55), (long, 0.2)].compactMap { r, w in r.map { ($0, w) } }
+        let parts = [(day, 0.7), (long, 0.3)].compactMap { r, w in r.map { ($0, w) } }
         let total = parts.reduce(0) { $0 + $1.1 }
         guard total > 0 else { return nil }
         return parts.reduce(0) { $0 + $1.0 * $1.1 } / total
@@ -153,7 +153,15 @@ extension AppModel {
             if r.blended != nil { detail[p] = r }
         }
         demandDetail = detail
-        demandRate = detail.compactMapValues(\.blended)
+        // 指数平滑：和上一次的结果按时间间隔混合，避免每次刷新预测都跳变（时间常数 2 小时）
+        let dt = demandUpdatedAt.map { now.timeIntervalSince($0) } ?? .infinity
+        let alpha = 1 - exp(-dt / (2 * 3600))
+        var smoothed: [Provider: Double] = [:]
+        for (p, v) in detail.compactMapValues(\.blended) {
+            if let old = demandRate[p], alpha.isFinite { smoothed[p] = old + (v - old) * alpha } else { smoothed[p] = v }
+        }
+        demandRate = smoothed
+        demandUpdatedAt = now
     }
 
     /// 预测各账号（%）到周额度重置时还会剩多少 = 会作废的额度。没有速度数据返回 nil。

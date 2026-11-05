@@ -87,6 +87,7 @@ final class AppModel: ObservableObject {
     var history: [String: [UsagePoint]] = [:]
     var demandRate: [Provider: Double] = [:]
     var demandDetail: [Provider: DemandRates] = [:]
+    var demandUpdatedAt: Date?
     var lastAutoSwitch: Date?
     @Published var updating = false
     @Published var switching: String?
