@@ -107,12 +107,11 @@ extension AppModel {
         return max(1, Int((t / 60).rounded(.up)))
     }
 
-    /// 预计什么时候会触发切换（按当前账号 5 小时额度的活跃速度，到「额度低于阈值」或「快用完」先到者）。
+    /// 预计什么时候会触发切换（按当前账号 5 小时额度的活跃速度，到「额度低于阈值」）。
     /// 时间以额度的获取时刻为起点算出，之后随着时间流逝倒数；没在使用 / 没有速度数据 / 会先重置则没有
     func switchDate(_ cur: Account) -> Date? {
         guard let u = usage[cur.id], let s = u.session, let rate = burnIfActive(cur), rate > 0 else { return nil }
         var t = max(0, (s.remaining - Double(autoSwitchThreshold)) / rate * 60)
-        if let ex = minutesToExhaust(cur) { t = min(t, max(0, ex - Self.exhaustLeadMinutes)) }
         let at = u.fetchedAt.addingTimeInterval(t * 60)
         if let r = s.resetsAt, r <= at { return nil }
         return at
@@ -166,7 +165,7 @@ extension AppModel {
     }
 
     /// 现在是否该切：返回要切到的账号和原因（每个 provider 独立判断，取第一个满足的）
-    ///  1. 当前账号额度快用完 → 切到优先级最高的账号
+    ///  1. 当前账号额度见底 → 切到优先级最高的账号
     ///  2. 当前账号额度还够，但别的账号周额度快重置且还有很多没用 → 切过去优先消耗（不然就作废了）
     func pendingSwitch() -> (Account, AutoSwitchReason, Account)? {
         for p in Provider.allCases {
@@ -174,13 +173,10 @@ extension AppModel {
             guard let cur = accounts.first(where: { $0.provider == p && isActive($0) }), cur.api == nil,
                   let curEff = effectiveRemaining(cur), let next = bestCandidate(for: p, usableNow: true),
                   let eff = effectiveRemaining(next, projected: true) else { continue }
-            // 额度见底，或按当前速度很快就会用完
-            let isLow = curEff <= Double(autoSwitchThreshold)
-            let exhaust = minutesToExhaust(cur).flatMap { $0 <= Self.exhaustLeadMinutes ? $0 : nil }
-            if isLow || exhaust != nil {
+            // 额度见底
+            if curEff <= Double(autoSwitchThreshold) {
                 guard !shouldWaitForReset(cur), eff >= curEff + Self.minGain else { continue }
-                if isLow { return (next, .low(from: cur.name, remaining: Int(curEff.rounded())), cur) }
-                return (next, .exhausting(from: cur.name, minutes: max(1, Int((exhaust ?? 0).rounded()))), cur)
+                return (next, .low(from: cur.name, remaining: Int(curEff.rounded())), cur)
             }
             // 候选有快作废额度且现在用得动；当前账号自己也有快作废额度时，只有候选的周额度比当前账号先到期才切
             // （始终先用最先到期的，所以不会来回切）
