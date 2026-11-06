@@ -102,22 +102,27 @@ extension AppModel {
     }
 
     /// 标定：Claude 每 1 美元（API 等价）的用量对应多少「额度单位」（周额度 % × 档位容量）。
-    /// 用每个账号当前周窗口里已用掉的额度，除以日志里同一时段归到该账号的费用。
-    /// 只用窗口起点晚于账号时间线开始记录的账号，否则起点前的日志没有账号标记，费用会漏算。
+    /// 汇总所有账号：同一时段内「额度实际下降的总量 ÷ 日志里的总费用」。
+    /// 时段从账号时间线开始记录（此前的日志没有账号标记）、日志统计开始、额度采样开始三者中最晚的那个整点起算。
+    /// 不按账号单独标定：单个账号的归属误差会被放大，样本少时系数会偏离整体很多。
     /// 网页 / 桌面端对话日志里看不到，系数会偏大，所以只是估计。
     func unitsPerDollar() -> Double? {
         guard let t0 = timeline.start(.claude) else { return nil }
-        var units = 0.0, cost = 0.0
-        for a in accounts where a.provider == .claude && a.api == nil && status[a.id] == nil {
-            guard let w = usage[a.id]?.weekly, let r = w.resetsAt else { continue }
-            let start = r.addingTimeInterval(-7 * 86400)
-            guard start.timeIntervalSince1970 >= t0 + 3600, start.timeIntervalSince1970 >= tokenStats.since + 3600 else { continue }
-            let used = (100 - w.remaining) * capacityWeight(a)
-            let c = tokenStats.cost(provider: .claude, account: a.uuid, from: start)
-            guard used >= 3, c >= 0.5 else { continue }
-            units += used; cost += c
+        let claude = accounts.filter { $0.provider == .claude && $0.api == nil }
+        guard let firstSample = claude.compactMap({ history[$0.id]?.first?.t.timeIntervalSince1970 }).min() else { return nil }
+        let from = max(t0, tokenStats.since, firstSample)
+        let start = Date(timeIntervalSince1970: (from / 3600).rounded(.up) * 3600)   // 对齐到整点，和小时桶一致
+        guard Date().timeIntervalSince(start) >= 6 * 3600 else { return nil }
+        var units = 0.0
+        for a in claude {
+            let pts = (history[a.id] ?? []).sorted { $0.t < $1.t }
+            for (x, y) in zip(pts, pts.dropFirst()) where y.t > start && sameWindow(x.wr, y.wr) {
+                guard let xw = x.w, let yw = y.w, yw < xw else { continue }
+                units += (xw - yw) * capacityWeight(a)
+            }
         }
-        guard cost >= 2, units > 0 else { return nil }
+        let cost = tokenStats.cost(provider: .claude, from: start)
+        guard cost >= 2, units >= 3 else { return nil }
         return units / cost
     }
 
@@ -151,7 +156,10 @@ extension AppModel {
                 let t = DemandRates(hour: tokenStats.costRate(provider: p, window: w[0]).map { $0 * k },
                                     day: tokenStats.costRate(provider: p, window: w[1]).map { $0 * k },
                                     week: tokenStats.costRate(provider: p, window: w[2]).map { $0 * k })
-                if t.blended != nil { r = t }
+                // 日志换算出的速度和额度采样的速度差太多（超过 2 倍）时，说明日志归属 / 标定不可靠，退回额度采样
+                if let tb = t.blended, let sb = r.blended {
+                    if tb <= sb * 2 && tb >= sb / 2 { r = t }
+                } else if t.blended != nil { r = t }
             }
             if r.blended != nil { detail[p] = r }
         }

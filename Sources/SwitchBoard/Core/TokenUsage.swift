@@ -320,6 +320,18 @@ extension TokenStats {
         return c
     }
 
+    /// 一个服务所有账号（含未归属的日志）从 from 起累计的 API 等价费用（美元）；from 需对齐到整点
+    func cost(provider: Provider, from: Date) -> Double {
+        let h0 = Int(from.timeIntervalSince1970 / 3600) * 3600
+        var c = 0.0
+        for (k, b) in buckets {
+            let p = k.split(separator: "|")
+            guard p.count == 4, p[0] == provider.rawValue, let h = Int(p[3]), h >= h0 else { continue }
+            c += b.cost
+        }
+        return c
+    }
+
     /// 一个服务整体的费用速度（美元/小时）。窗口按小时桶对齐；统计范围不够长时返回 nil
     func costRate(provider: Provider, window: TimeInterval, now: Date = Date()) -> Double? {
         let covered = now.timeIntervalSince1970 - since
