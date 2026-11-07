@@ -38,7 +38,9 @@ enum TokenPrice {
 
     /// 缓存读 0.1×，5 分钟缓存写 1.25×，1 小时缓存写 2×
     static func cost(_ model: String, input: Int, output: Int, cacheRead: Int, write5m: Int, write1h: Int) -> Double {
-        guard let r = rates(model) else { return 0 }
+        guard var r = rates(model) else { return 0 }
+        // Haiku 5.5：提示（输入+缓存）超过 100K token 时整条按 5 倍价（0.5 / 2.5）
+        if model.lowercased().contains("haiku-5"), input + cacheRead + write5m + write1h > 100_000 { r = (r.input * 5, r.output * 5) }
         let p = r.input / 1e6
         return Double(input) * p + Double(output) * r.output / 1e6 + Double(cacheRead) * p * 0.1
             + Double(write5m) * p * 1.25 + Double(write1h) * p * 2
@@ -222,7 +224,7 @@ enum TokenScanner {
               let msg = o["message"] as? [String: Any], let u = msg["usage"] as? [String: Any],
               let model = msg["model"] as? String, !model.hasPrefix("<"),
               let t = ts(o["timestamp"] as? String) else { return }
-        // 同一条消息会按内容块拆成多行，用量相同，只记一次（取最后一行）
+        // 同一条消息会按内容块拆成多行，用量相同（已用真实日志验证首行与末行一致），只记一次（取第一行）
         let id = msg["id"] as? String
         if let id, id == st.lastID {
             // 同一条消息的后续内容块：从首块完成到这一块完成，是纯生成时间（不含首 token 延迟）

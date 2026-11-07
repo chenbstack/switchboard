@@ -2,6 +2,12 @@ import SwiftUI
 
 func compactTokens(_ n: Int) -> String {
     let d = Double(n)
+    if Lang.isZh {
+        // 中文按万 / 亿计
+        if d >= 1e8 { return String(format: d >= 1e10 ? "%.0f亿" : "%.2f亿", d / 1e8) }
+        if d >= 1e4 { return String(format: d >= 1e6 ? "%.0f万" : "%.1f万", d / 1e4) }
+        return "\(n)"
+    }
     if d >= 1e9 { return String(format: "%.2fB", d / 1e9) }
     if d >= 1e6 { return String(format: d >= 1e8 ? "%.0fM" : "%.1fM", d / 1e6) }
     if d >= 1e3 { return String(format: d >= 1e5 ? "%.0fK" : "%.1fK", d / 1e3) }
