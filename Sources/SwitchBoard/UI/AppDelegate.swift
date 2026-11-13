@@ -55,6 +55,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        installEditMenu()
+
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.target = self
         item.button?.action = #selector(toggle)
@@ -189,6 +191,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         img.isTemplate = true
         return img
+    }
+
+    /// accessory 应用没有主菜单，⌘V/⌘C/⌘X/⌘A/⌘Z 无处分发，输入框无法粘贴。
+    /// 菜单本身不可见，只为让这些快捷键能走到第一响应者。
+    private func installEditMenu() {
+        let main = NSMenu()
+        let editItem = NSMenuItem()
+        main.addItem(editItem)
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+        NSApp.mainMenu = main
     }
 
     // MARK: 面板
